@@ -100,16 +100,7 @@
 .claude-native-context-row {
   display: flex;
   align-items: center;
-  gap: 6px;
   margin-bottom: 4px;
-  cursor: default;
-}
-.claude-native-context-bar {
-  display: flex; align-items: center; justify-content: center;
-  width: 20px; height: 20px; flex-shrink: 0;
-}
-.claude-native-context-bar svg {
-  width: 16px; height: 16px;
 }
 .claude-native-context-label {
   font-family: var(--cc-mono);

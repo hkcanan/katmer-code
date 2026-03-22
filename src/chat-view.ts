@@ -861,45 +861,15 @@ export class ClaudeChatView extends ItemView {
   private updateContextBar(): void {
     if (!this.session || !this.contextBar || !this.contextLabel) return;
 
-    // Context = input + cache_creation + cache_read (total tokens sent to model)
     const contextTokens = this.session.inputTokens
       + (this.session.cacheCreationTokens || 0)
       + (this.session.cacheReadTokens || 0);
     const contextWindow = this.session.contextWindow || 200000;
-    const pct = Math.min((contextTokens / contextWindow) * 100, 100);
-    const pctRound = Math.round(pct);
-
-    // SVG arc gauge (240-degree arc)
-    const size = 16, strokeWidth = 2, radius = (size - strokeWidth) / 2;
-    const cx = size / 2, cy = size / 2;
-    const startAngle = 150, endAngle = 390;
-    const arcRadians = ((endAngle - startAngle) * Math.PI) / 180;
-    const circumference = radius * arcRadians;
-    const fillLength = (pct / 100) * circumference;
-
-    const startRad = (startAngle * Math.PI) / 180;
-    const endRad = (endAngle * Math.PI) / 180;
-    const x1 = cx + radius * Math.cos(startRad);
-    const y1 = cy + radius * Math.sin(startRad);
-    const x2 = cx + radius * Math.cos(endRad);
-    const y2 = cy + radius * Math.sin(endRad);
-
+    const pct = Math.round(Math.min((contextTokens / contextWindow) * 100, 100));
     const warning = pct > 80;
-    const strokeColor = warning ? "#E57373" : "var(--cc-terracotta, #D97757)";
 
-    this.contextBar.empty();
-    this.contextBar.innerHTML = `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
-      <path d="M ${x1} ${y1} A ${radius} ${radius} 0 1 1 ${x2} ${y2}"
-        fill="none" stroke="var(--background-modifier-border)" stroke-width="${strokeWidth}" stroke-linecap="round"/>
-      <path d="M ${x1} ${y1} A ${radius} ${radius} 0 1 1 ${x2} ${y2}"
-        fill="none" stroke="${strokeColor}" stroke-width="${strokeWidth}" stroke-linecap="round"
-        stroke-dasharray="${circumference}" stroke-dashoffset="${circumference - fillLength}"
-        style="transition: stroke-dashoffset 0.3s ease"/>
-    </svg>`;
-
-    // Label
     const fmtK = (n: number) => n >= 1000 ? Math.round(n / 1000) + "K" : String(n);
-    this.contextLabel.textContent = `${fmtK(contextTokens)} / ${fmtK(contextWindow)} (${pctRound}%)`;
+    this.contextLabel.textContent = `${fmtK(contextTokens)} / ${fmtK(contextWindow)} (${pct}%)`;
     this.contextLabel.style.color = warning ? "#E57373" : "";
 
     // Tooltip with compact suggestion
