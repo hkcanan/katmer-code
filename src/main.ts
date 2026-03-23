@@ -3,7 +3,7 @@ import { ClaudeChatView, VIEW_TYPE_CLAUDE } from "./chat-view";
 import { ReportView, VIEW_TYPE_REPORT } from "./report-view";
 import { ClaudeNativeSettingTab } from "./settings";
 import { DEFAULT_SETTINGS, SKILL_CATALOG, type ClaudeNativeSettings, type SavedSession } from "./types";
-import { inlineDiffField } from "./editor-extension";
+import { inlineDiffExtensions } from "./editor-extension";
 import { existsSync, writeFileSync, unlinkSync, mkdirSync, readFileSync, readdirSync, watch } from "fs";
 import { join } from "path";
 import { homedir } from "os";
@@ -108,7 +108,7 @@ export default class ClaudeNativePlugin extends Plugin {
     this.setupReportWatcher();
 
     // CM6 inline diff extension
-    this.registerEditorExtension([inlineDiffField]);
+    this.registerEditorExtension(inlineDiffExtensions);
 
     // @codemirror/merge tested — incompatible with Obsidian's CM6 (DeletionWidget viewport crash).
     // Using custom StateField-based inline diff (editor-extension.ts).

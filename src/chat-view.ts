@@ -1,6 +1,11 @@
 import { ItemView, MarkdownRenderer, WorkspaceLeaf, setIcon, TFile, Notice } from "obsidian";
 import { EditorView } from "@codemirror/view";
-import { addInlineDiff, clearInlineDiff } from "./editor-extension";
+import {
+  addChange, acceptChange, acceptAllChanges, rejectAllChanges, rejectSingleChange,
+  goToNextChange, goToPreviousChange, getChangeSummary,
+  changeRegistry,
+  type InlineChange,
+} from "./editor-extension";
 import { ProcessManager } from "./process-manager";
 import { execFile } from "child_process";
 import { tmpdir, homedir } from "os";
@@ -67,6 +72,9 @@ export class ClaudeChatView extends ItemView {
   private abortBtn!: HTMLElement;
   private emptyState!: HTMLElement;
   private contextBar!: HTMLElement;
+  private diffBar!: HTMLElement;
+  private diffBarLabel!: HTMLElement;
+  private diffBarFilePath: string = "";
   private contextLabel!: HTMLElement;
   private modelBtns!: Record<ModelChoice, HTMLElement>;
   private effortBtns!: Record<EffortLevel, HTMLElement>;
@@ -217,6 +225,64 @@ export class ClaudeChatView extends ItemView {
     this.emptyState.empty();
     this.emptyState.createDiv({ cls: "claude-native-empty-title", text: "KatmerCode" });
     this.emptyState.createDiv({ cls: "claude-native-empty-subtitle", text: "Checking Claude Code CLI\u2026" });
+
+    // ── Diff bar — above input, visible when pending changes exist ──
+    this.diffBar = container.createDiv("cc-diff-bar");
+    this.diffBar.addClass("is-hidden");
+    {
+      const prevBtn = this.diffBar.createEl("button", { cls: "cc-diffbar-btn", attr: { "aria-label": "Previous" } });
+      setIcon(prevBtn, "chevron-left");
+      prevBtn.addEventListener("click", () => {
+        const cmView = this.getEditorForFile(this.diffBarFilePath);
+        if (cmView) goToPreviousChange(cmView);
+      });
+
+      this.diffBarLabel = this.diffBar.createSpan({ cls: "cc-diffbar-label", text: "" });
+
+      const nextBtn = this.diffBar.createEl("button", { cls: "cc-diffbar-btn", attr: { "aria-label": "Next" } });
+      setIcon(nextBtn, "chevron-right");
+      nextBtn.addEventListener("click", () => {
+        const cmView = this.getEditorForFile(this.diffBarFilePath);
+        if (cmView) goToNextChange(cmView);
+      });
+
+      this.diffBar.createDiv("cc-diffbar-spacer");
+
+      const acceptBtn = this.diffBar.createEl("button", { cls: "cc-diffbar-btn cc-diffbar-accept", text: "✓ Accept" });
+      acceptBtn.addEventListener("click", () => {
+        const cmView = this.getEditorForFile(this.diffBarFilePath);
+        if (cmView) {
+          // Accept the change nearest to cursor
+          const changes = cmView.state.field(changeRegistry);
+          const cursor = cmView.state.selection.main.head;
+          const nearest = changes
+            .filter(c => c.status === "pending")
+            .sort((a, b) => Math.abs(a.from - cursor) - Math.abs(b.from - cursor))[0];
+          if (nearest) cmView.dispatch({ effects: acceptChange.of(nearest.id) });
+          this.refreshDiffBar();
+        }
+      });
+
+      const rejectBtn = this.diffBar.createEl("button", { cls: "cc-diffbar-btn cc-diffbar-reject", text: "✕ Undo" });
+      rejectBtn.addEventListener("click", () => {
+        const cmView = this.getEditorForFile(this.diffBarFilePath);
+        if (cmView) {
+          const changes = cmView.state.field(changeRegistry);
+          const cursor = cmView.state.selection.main.head;
+          const nearest = changes
+            .filter(c => c.status === "pending")
+            .sort((a, b) => Math.abs(a.from - cursor) - Math.abs(b.from - cursor))[0];
+          if (nearest) rejectSingleChange(cmView, nearest.id);
+          this.refreshDiffBar();
+        }
+      });
+
+      const acceptAllBtn = this.diffBar.createEl("button", { cls: "cc-diffbar-btn cc-diffbar-accept-all", text: "✓ All" });
+      acceptAllBtn.addEventListener("click", () => {
+        const cmView = this.getEditorForFile(this.diffBarFilePath);
+        if (cmView) { acceptAllChanges(cmView); this.refreshDiffBar(); }
+      });
+    }
 
     // ── Input area — single box like claude.ai ──
     const inputArea = container.createDiv("cc-input-area");
@@ -1817,7 +1883,8 @@ export class ClaudeChatView extends ItemView {
   }
 
   /**
-   * Edit is auto-applied (acceptEdits). Show diff in chat + open file with undo banner.
+   * Edit is auto-applied (acceptEdits). Show compact card in chat + inline diff in editor.
+   * Navigation and bulk actions live in the diff bar (above input), not per-card.
    */
   private renderEditDiff(parent: HTMLElement, tc: ToolCallInfo): void {
     const filePath = typeof tc.input.file_path === "string" ? tc.input.file_path : "";
@@ -1825,26 +1892,40 @@ export class ClaudeChatView extends ItemView {
     const oldStr = typeof tc.input.old_string === "string" ? tc.input.old_string : "";
     const newStr = typeof tc.input.new_string === "string" ? tc.input.new_string : "";
 
-    // Compact indicator in chat
+    // Compact card — just file name + status, no nav buttons
     const panel = parent.createDiv("claude-native-diff");
+    panel.dataset.toolId = tc.id;
     const header = panel.createDiv("claude-native-diff-header");
     const iconSpan = header.createSpan("claude-native-tool-icon");
     setIcon(iconSpan, "pencil");
     header.createSpan({ text: fileName, cls: "claude-native-diff-title" });
-
     const statusSpan = header.createSpan({ cls: "claude-native-diff-status is-accepted", text: "Applied" });
 
-    // Only trigger showEditInEditor ONCE per edit (cumulative re-renders would re-trigger)
+    // Only trigger showEditInEditor ONCE per edit
     if (!this.editDiffShown.has(tc.id)) {
       this.editDiffShown.add(tc.id);
-      void this.showEditInEditor(filePath, oldStr, newStr, panel, statusSpan);
+      void this.showEditInEditor(filePath, oldStr, newStr, tc.id, panel, statusSpan);
     }
   }
 
-  /** Open file, show inline diff with CM6 decorations. Edit is already applied. */
+  /** Get CM6 EditorView for a given file path (if open) */
+  private getEditorForFile(filePath: string): EditorView | null {
+    const vaultPath = (this.app.vault.adapter as { basePath?: string }).basePath || "";
+    let relativePath = filePath;
+    if (filePath.startsWith(vaultPath)) {
+      relativePath = filePath.slice(vaultPath.length).replace(/^\//, "");
+    }
+    const leaf = this.app.workspace.getLeavesOfType("markdown")
+      .find(l => (l.view as { file?: TFile }).file?.path === relativePath);
+    if (!leaf) return null;
+    const obsEditor = (leaf.view as { editor?: { cm?: EditorView } }).editor;
+    return obsEditor?.cm || null;
+  }
+
+  /** Open file, show inline diff with CM6 position-tracked decorations. */
   private async showEditInEditor(
     filePath: string, oldStr: string, newStr: string,
-    chatPanel: HTMLElement, statusSpan: HTMLElement
+    toolUseId: string, chatPanel: HTMLElement, statusSpan: HTMLElement
   ): Promise<void> {
     const vaultPath = (this.app.vault.adapter as { basePath?: string }).basePath || "";
     let relativePath = filePath;
@@ -1866,7 +1947,6 @@ export class ClaudeChatView extends ItemView {
     // Ensure file is in editing mode (reading mode has no editor)
     const leafView = leaf.view as ItemView & { getMode?: () => string };
     if (leafView?.getMode?.() === "preview") {
-      // Switch to editing mode
       const state = leaf.getViewState();
       state.state = { ...state.state, mode: "source" };
       await leaf.setViewState(state);
@@ -1884,109 +1964,99 @@ export class ClaudeChatView extends ItemView {
       const content = cmView.state.doc.toString();
       const idx = content.indexOf(newStr);
       if (idx === -1) {
-        // File might not be refreshed yet — retry with longer delay
         if (attempt < 8) setTimeout(() => tryShowDiff(attempt + 1), 800);
         return;
       }
 
       const from = idx;
       const to = idx + newStr.length;
+      const changeId = `change-${toolUseId}-${from}`;
+
+      // Track file for diff bar
+      this.diffBarFilePath = filePath;
 
       // Scroll to the edit
       cmView.dispatch({
         effects: EditorView.scrollIntoView(from, { y: "center" }),
       });
 
-      // Add inline diff decorations
+      // Add position-tracked change to registry
       cmView.dispatch({
-        effects: addInlineDiff.of({
+        effects: addChange.of({
+          id: changeId,
           from,
           to,
-          oldText: oldStr,
+          originalText: oldStr,
           newText: newStr,
-          onAccept: () => {
-            statusSpan.textContent = "Accepted";
-            statusSpan.className = "claude-native-diff-status is-accepted";
-          },
-          onReject: (view: EditorView) => {
-            // Revert: replace new_string back with old_string
-            const curContent = view.state.doc.toString();
-            const curIdx = curContent.indexOf(newStr);
-            if (curIdx !== -1) {
-              view.dispatch({
-                changes: { from: curIdx, to: curIdx + newStr.length, insert: oldStr },
-              });
-            }
-            statusSpan.textContent = "Undone";
-            statusSpan.className = "claude-native-diff-status is-rejected";
-            chatPanel.addClass("is-rejected");
-          },
+          status: "pending",
+          filePath,
+          toolUseId,
         }),
       });
+
+      // Update chat panel with change count
+      this.updateDiffSummary(cmView, statusSpan);
+
+      // Poll registry for status changes (accept/reject from editor buttons)
+      const pollInterval = setInterval(() => {
+        if (!document.contains(chatPanel)) {
+          clearInterval(pollInterval);
+          return;
+        }
+        const changes = cmView.state.field(changeRegistry);
+        const thisChange = changes.find(c => c.id === changeId);
+        if (!thisChange) {
+          clearInterval(pollInterval);
+          return;
+        }
+        if (thisChange.status === "accepted") {
+          statusSpan.textContent = "Accepted";
+          statusSpan.className = "claude-native-diff-status is-accepted";
+          clearInterval(pollInterval);
+        } else if (thisChange.status === "rejected") {
+          statusSpan.textContent = "Undone";
+          statusSpan.className = "claude-native-diff-status is-rejected";
+          chatPanel.addClass("is-rejected");
+          clearInterval(pollInterval);
+        }
+        this.updateDiffSummary(cmView, statusSpan);
+      }, 500);
     };
     setTimeout(() => tryShowDiff(0), 400);
   }
 
-  // ── Word-level diff ──
-
-  /** Find words/phrases in newStr that don't exist in oldStr */
-  private findChangedWords(oldStr: string, newStr: string): Array<{ start: number; end: number }> {
-    // Split into words, find which segments in newStr are new
-    const oldWords = new Set(oldStr.split(/(\s+)/).filter(w => w.trim()));
-    const results: Array<{ start: number; end: number }> = [];
-
-    // Simple approach: find contiguous new segments
-    const newWords = newStr.split(/(\s+)/);
-    let pos = 0;
-    let inNew = false;
-    let segStart = 0;
-
-    for (const word of newWords) {
-      const isWhitespace = !word.trim();
-      const isOld = oldWords.has(word);
-
-      if (!isWhitespace && !isOld) {
-        if (!inNew) {
-          segStart = pos;
-          inNew = true;
-        }
-      } else if (inNew && !isWhitespace) {
-        results.push({ start: segStart, end: pos });
-        inNew = false;
-      }
-      pos += word.length;
+  /** Update the status span with change summary */
+  private updateDiffSummary(cmView: EditorView, statusSpan: HTMLElement): void {
+    const summary = getChangeSummary(cmView);
+    if (summary.pending > 0) {
+      statusSpan.textContent = `${summary.pending} pending`;
+      statusSpan.className = "claude-native-diff-status is-pending";
+    } else if (summary.total > 0) {
+      statusSpan.textContent = "Done";
+      statusSpan.className = "claude-native-diff-status is-accepted";
     }
-    if (inNew) {
-      results.push({ start: segStart, end: pos });
-    }
-
-    return results;
+    this.refreshDiffBar();
   }
 
-  /** Render text with highlighted spans for changed words */
-  private renderWithHighlights(
-    el: HTMLElement,
-    text: string,
-    highlights: Array<{ start: number; end: number }>
-  ): void {
-    let lastEnd = 0;
-    for (const h of highlights) {
-      // Text before highlight
-      if (h.start > lastEnd) {
-        el.appendText(text.slice(lastEnd, h.start));
-      }
-      // Highlighted span
-      el.createSpan({
-        cls: "claude-native-diff-word-new",
-        text: text.slice(h.start, h.end),
-      });
-      lastEnd = h.end;
+  /** Show/hide/update the diff bar above input */
+  private refreshDiffBar(): void {
+    if (!this.diffBar) return;
+    const cmView = this.getEditorForFile(this.diffBarFilePath);
+    if (!cmView) {
+      this.diffBar.addClass("is-hidden");
+      return;
     }
-    // Remaining text
-    if (lastEnd < text.length) {
-      el.appendText(text.slice(lastEnd));
+    const summary = getChangeSummary(cmView);
+    if (summary.pending === 0) {
+      this.diffBar.addClass("is-hidden");
+      return;
     }
+    this.diffBar.removeClass("is-hidden");
+    const fileName = this.diffBarFilePath.split("/").pop() || "";
+    this.diffBarLabel.textContent = `${fileName} · ${summary.pending} change${summary.pending > 1 ? "s" : ""}`;
   }
+
+  // (word-level diff now handled by editor-extension.ts via commonPrefix/commonSuffix)
 
   /** Add language labels + copy buttons to rendered code blocks */
   private enhanceCodeBlocks(container: HTMLElement): void {

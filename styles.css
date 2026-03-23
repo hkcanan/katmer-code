@@ -286,6 +286,7 @@
   align-items: center;
   gap: 6px;
   padding: 8px 12px;
+  flex-wrap: wrap;
 }
 .claude-native-diff-title {
   font-family: var(--cc-mono);
@@ -297,12 +298,12 @@
   font-family: var(--cc-mono);
   font-size: 0.62rem;
   font-weight: 600;
-  margin-left: auto;
   padding: 2px 8px;
   border-radius: 6px;
 }
 .claude-native-diff-status.is-accepted { background: rgba(91,166,126,0.1); color: #5BA67E; }
 .claude-native-diff-status.is-rejected { background: rgba(204,95,74,0.08); color: #CC5F4A; }
+.claude-native-diff-status.is-pending { background: rgba(180,160,60,0.1); color: #B4A03C; }
 .claude-native-diff.is-rejected { opacity: 0.5; }
 
 /* ═══════════════════════════════════════
@@ -554,65 +555,135 @@
 
 /* (old input styles removed — using cc-input-box now) */
 
-/* ── Inline diff — Word Track Changes (CM6) ── */
+/* ── Inline diff — Multi-Change Track System (CM6) ── */
+
+/* Line with a pending change — enables hover actions */
+.cc-change-line { position: relative; }
+
+/* Deleted text: strikethrough, faded */
 .cc-deleted-inline {
   color: #CC5F4A;
   text-decoration: line-through;
-  text-decoration-color: #CC5F4A;
-  opacity: 0.65;
+  text-decoration-color: rgba(204, 95, 74, 0.6);
+  text-decoration-thickness: 1.5px;
+  opacity: 0.6;
   background: rgba(204, 95, 74, 0.06);
   border-radius: 2px;
-  padding: 0 2px;
+  padding: 1px 3px;
+  margin: 0 1px;
+  font-style: italic;
 }
 .theme-dark .cc-deleted-inline {
   color: #E8A88E;
-  text-decoration-color: #E8A88E;
-  background: rgba(232, 168, 142, 0.08);
+  text-decoration-color: rgba(232, 168, 142, 0.5);
+  background: rgba(232, 168, 142, 0.07);
 }
 
+/* Inserted text: green highlight */
 .cc-inserted-inline {
-  color: #5BA67E;
-  background: rgba(91, 166, 126, 0.08);
-  border-bottom: 2px solid rgba(91, 166, 126, 0.4);
+  color: #3D8B5E;
+  background: rgba(91, 166, 126, 0.1);
+  border-bottom: 2px solid rgba(91, 166, 126, 0.45);
   border-radius: 2px;
-  padding: 0 2px;
+  padding: 1px 3px;
+  margin: 0 1px;
 }
 .theme-dark .cc-inserted-inline {
   color: #7DC9A0;
   background: rgba(125, 201, 160, 0.1);
+  border-bottom-color: rgba(125, 201, 160, 0.35);
 }
 
-/* Inline accept/reject — below change, centered */
-.cc-diff-actions-inline {
-  display: block;
-  text-align: center;
-  padding: 6px 0 2px;
+/* Accept/reject buttons — always visible, always colored */
+.cc-hover-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 6px;
+  vertical-align: middle;
 }
-.cc-action-btn {
+.cc-hover-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px; height: 28px;
-  font-size: 0.8rem; font-weight: 700;
-  border: 1px solid var(--cc-border);
-  border-radius: var(--cc-radius-sm);
-  background: var(--cc-surface);
+  width: 20px; height: 20px;
+  font-size: 0.68rem; font-weight: 700;
+  border: 1px solid rgba(0,0,0,0.08);
+  border-radius: 4px;
   cursor: pointer;
-  transition: all 150ms;
-  box-shadow: var(--cc-shadow-sm);
-  margin: 0 3px;
+  transition: all 120ms ease;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+  line-height: 1;
 }
-.cc-action-accept { color: #5BA67E; }
-.cc-action-accept:hover {
-  background: #5BA67E; color: white;
-  border-color: #5BA67E;
-  box-shadow: 0 2px 8px rgba(91,166,126,0.25);
+.cc-hover-accept {
+  background: #5BA67E; color: white; border-color: #5BA67E;
 }
-.cc-action-reject { color: #CC5F4A; }
-.cc-action-reject:hover {
-  background: #CC5F4A; color: white;
-  border-color: #CC5F4A;
-  box-shadow: 0 2px 8px rgba(204,95,74,0.25);
+.cc-hover-accept:hover {
+  box-shadow: 0 2px 6px rgba(91,166,126,0.3);
+  transform: scale(1.1);
+}
+.cc-hover-reject {
+  background: #CC5F4A; color: white; border-color: #CC5F4A;
+}
+.cc-hover-reject:hover {
+  box-shadow: 0 2px 6px rgba(204,95,74,0.3);
+  transform: scale(1.1);
+}
+.theme-dark .cc-hover-accept { background: #4A9A6E; border-color: #4A9A6E; }
+.theme-dark .cc-hover-reject { background: #B85545; border-color: #B85545; }
+
+/* ── Diff bar — above input ── */
+.cc-diff-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--cc-surface, rgba(0,0,0,0.02));
+  border-top: 1px solid var(--cc-border-subtle, rgba(0,0,0,0.06));
+  font-family: var(--cc-mono, monospace);
+  font-size: 0.7rem;
+}
+.cc-diff-bar.is-hidden { display: none; }
+.cc-diffbar-label {
+  font-weight: 500;
+  color: var(--cc-text-secondary, #666);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cc-diffbar-spacer { flex: 1; }
+.cc-diffbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px; height: 22px;
+  padding: 0 6px;
+  font-size: 0.65rem; font-weight: 600;
+  font-family: var(--cc-mono, monospace);
+  border: 1px solid var(--cc-border-subtle, rgba(0,0,0,0.08));
+  border-radius: 4px;
+  background: transparent;
+  color: var(--cc-text-muted, #888);
+  cursor: pointer;
+  transition: all 120ms;
+}
+.cc-diffbar-btn:hover {
+  background: var(--cc-surface-hover, rgba(0,0,0,0.04));
+  color: var(--cc-text, #333);
+  border-color: var(--cc-border, rgba(0,0,0,0.12));
+}
+.cc-diffbar-btn svg { width: 12px; height: 12px; }
+.cc-diffbar-accept { color: #5BA67E; }
+.cc-diffbar-accept:hover { background: rgba(91,166,126,0.08); border-color: #5BA67E; }
+.cc-diffbar-reject { color: #CC5F4A; }
+.cc-diffbar-reject:hover { background: rgba(204,95,74,0.06); border-color: #CC5F4A; }
+.cc-diffbar-accept-all { color: #5BA67E; font-weight: 700; }
+.cc-diffbar-accept-all:hover { background: #5BA67E; color: white; border-color: #5BA67E; }
+
+/* Change line — left border indicator (via :has selector) */
+.cm-line:has(.cc-inserted-inline),
+.cm-line:has(.cc-deleted-inline) {
+  border-left: 3px solid #D4A843 !important;
 }
 
 /* ── Error ── */

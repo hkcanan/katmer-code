@@ -1,7 +1,7 @@
 {
   "id": "katmer-code",
   "name": "KatmerCode",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "minAppVersion": "1.4.0",
   "description": "Run Claude Code with inline diff editing, academic research skills, and MCP support.",
   "author": "hkcanan",
