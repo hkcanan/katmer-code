@@ -64,7 +64,7 @@ export default class ClaudeNativePlugin extends Plugin {
       const view = new ClaudeChatView(leaf, this.settings);
       // Wire up session saving
       view.onSaveSession = (session) => void this.saveSession(session);
-      view.onShowSessionPicker = () => this.showSessionPicker();
+      view.onShowSessionPicker = () => void this.showSessionPicker();
       return view;
     });
 

@@ -155,6 +155,7 @@ export class ClaudeChatView extends ItemView {
   getIcon(): string { return "cat"; }
 
   async onOpen(): Promise<void> {
+    await Promise.resolve();
     const container = this.containerEl.children[1] as HTMLElement;
     container.empty();
     container.addClass("claude-native-root");
@@ -675,7 +676,7 @@ export class ClaudeChatView extends ItemView {
     } else if (toolName === "WebSearch" && input.query) {
       detail = typeof input.query === "string" ? input.query : "".slice(0, 40);
       icon = "search";
-    } else if (toolName === "Grep" && input.pattern) {
+    } else if (toolName === "Grep" && typeof input.pattern === "string") {
       detail = `"${typeof input.pattern === "string" ? input.pattern : "".slice(0, 25)}"`;
       icon = "search";
     } else if (toolName === "Agent" && input.description) {
@@ -821,6 +822,7 @@ export class ClaudeChatView extends ItemView {
   }
 
   async onClose(): Promise<void> {
+    await Promise.resolve();
     this.pm.destroy();
   }
 
@@ -1548,12 +1550,12 @@ export class ClaudeChatView extends ItemView {
   private showContextFullError(): void {
     if (!this.chatContainer) return;
     const wrapper = this.chatContainer.createDiv("claude-native-msg claude-native-msg-error");
-    wrapper.createDiv({ cls: "claude-native-msg-label", text: "Context Full" });
+    wrapper.createDiv({ cls: "claude-native-msg-label", text: "Context full" });
     const body = wrapper.createDiv("claude-native-msg-body");
     body.createEl("p", { text: "Context window is full. Start a new session to continue." });
     const btn = body.createEl("button", {
       cls: "katmer-report-notice-btn katmer-report-notice-btn-primary",
-      text: "New Session",
+      text: "New session",
     });
     btn.addEventListener("click", () => this.newSession());
     this.scrollToBottom();
@@ -2063,13 +2065,13 @@ export class ClaudeChatView extends ItemView {
 
   /** Reset textarea height to auto (used after sending) */
   private resetInputHeight(): void {
-    this.inputEl.style.setProperty("height", "auto");
+    this.inputEl.setCssStyles({ "height": "auto" });
   }
 
   /** Auto-resize textarea to fit content */
   private autoResizeInput(): void {
-    this.inputEl.style.setProperty("height", "auto");
-    this.inputEl.style.setProperty("height", Math.min(this.inputEl.scrollHeight, 160) + "px");
+    this.inputEl.setCssStyles({ "height": "auto" });
+    this.inputEl.setCssStyles({ "height": Math.min(this.inputEl.scrollHeight, 160) + "px" });
   }
 
   private scrollToBottom(): void {
@@ -2106,7 +2108,7 @@ export class ClaudeChatView extends ItemView {
       const cmd = typeof input.command === "string" ? input.command : "";
       return cmd.length > 50 ? cmd.slice(0, 50) + "…" : cmd;
     }
-    if (name === "Grep" && input.pattern) return `/${input.pattern}/`;
+    if (name === "Grep" && input.pattern) return `/${typeof input.pattern === "string" ? input.pattern : ""}/`;
     if (name === "Glob" && input.pattern) return typeof input.pattern === "string" ? input.pattern : "";
     return "";
   }

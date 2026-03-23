@@ -14,8 +14,8 @@ export class ClaudeNativeSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    // ── General ──
-    new Setting(containerEl).setName("General").setHeading();
+    
+    
 
     new Setting(containerEl)
       .setName("CLI path")
