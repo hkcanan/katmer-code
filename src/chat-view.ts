@@ -1,7 +1,11 @@
-import { ItemView, MarkdownRenderer, WorkspaceLeaf, setIcon, TFile } from "obsidian";
+import { ItemView, MarkdownRenderer, WorkspaceLeaf, setIcon, TFile, Notice } from "obsidian";
 import { EditorView } from "@codemirror/view";
 import { addInlineDiff, clearInlineDiff } from "./editor-extension";
 import { ProcessManager } from "./process-manager";
+import { execFile } from "child_process";
+import { tmpdir, homedir } from "os";
+import { join } from "path";
+import { writeFileSync } from "fs";
 import type {
   ClaudeEvent,
   AssistantMessageEvent,
@@ -18,6 +22,17 @@ import type {
   SavedSession,
 } from "./types";
 import { MODEL_LABELS, EFFORT_LABELS, SKILL_CATALOG } from "./types";
+
+/** Get file path from Electron webUtils or legacy File.path */
+function getFilePathFromFile(f: File): string | undefined {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { webUtils } = require("electron") as { webUtils: { getPathForFile(f: File): string } };
+    return webUtils.getPathForFile(f);
+  } catch {
+    return (f as File & { path?: string }).path;
+  }
+}
 
 export const VIEW_TYPE_CLAUDE = "claude-native-chat";
 
@@ -113,7 +128,7 @@ export class ClaudeChatView extends ItemView {
     super(leaf);
     this.settings = settings;
     this.pm = new ProcessManager(settings);
-    this.pm.model = settings.defaultModel as any || "sonnet";
+    this.pm.model = settings.defaultModel || "sonnet";
     this.pm.onEvent = (e) => this.handleEvent(e);
     this.pm.onStateChange = (s) => this.updateUI();
     this.pm.onComplete = () => this.onResponseComplete();
@@ -195,7 +210,7 @@ export class ClaudeChatView extends ItemView {
 
     // Live progress indicator (at bottom of chat, scrolls with content)
     this.liveProgressEl = this.chatContainer.createDiv("cc-live-progress");
-    this.liveProgressEl.style.display = "none";
+    this.liveProgressEl.addClass("is-hidden");
 
     this.emptyState = this.chatContainer.createDiv("claude-native-empty");
     this.emptyState.empty();
@@ -208,7 +223,7 @@ export class ClaudeChatView extends ItemView {
 
     // Queue indicator (inside the box, top)
     this.queueIndicatorEl = inputBox.createDiv("cc-queue-indicator");
-    this.queueIndicatorEl.style.display = "none";
+    this.queueIndicatorEl.addClass("is-hidden");
 
     // Context card (inside the box, top)
     this.contextCardEl = inputBox.createDiv("cc-context-slot");
@@ -255,7 +270,7 @@ export class ClaudeChatView extends ItemView {
 
     // ── Model/effort popup ──
     const popup = inputArea.createDiv("cc-popup");
-    popup.style.display = "none";
+    popup.addClass("is-hidden");
 
     const MODEL_DESCS: Record<string, string> = {
       "opus[1m]": "Most capable, 1M extended context",
@@ -274,7 +289,7 @@ export class ClaudeChatView extends ItemView {
         modelLabel.textContent = MODEL_LABELS[key];
         popup.querySelectorAll(".cc-popup-item").forEach(el => el.removeClass("is-active"));
         item.addClass("is-active");
-        popup.style.display = "none";
+        popup.addClass("is-hidden");
       });
       this.modelBtns[key] = item;
     }
@@ -303,26 +318,25 @@ export class ClaudeChatView extends ItemView {
 
     // Toggle
     modelTrigger.addEventListener("click", () => {
-      popup.style.display = popup.style.display === "none" ? "block" : "none";
+      popup.toggleClass("is-hidden", !popup.hasClass("is-hidden"));
     });
     document.addEventListener("click", (e) => {
-      if (!inputArea.contains(e.target as Node)) popup.style.display = "none";
+      if (!inputArea.contains(e.target as Node)) popup.addClass("is-hidden");
     });
 
     // Skill autocomplete popup (positioned above input)
     this.skillPopup = inputBox.createDiv("cc-skill-popup");
-    this.skillPopup.style.display = "none";
+    this.skillPopup.addClass("is-hidden");
 
     // Auto-resize textarea + skill autocomplete
     this.inputEl.addEventListener("input", () => {
-      this.inputEl.style.height = "auto";
-      this.inputEl.style.height = Math.min(this.inputEl.scrollHeight, 160) + "px";
+      this.autoResizeInput();
       this.updateSkillPopup();
     });
 
     this.inputEl.addEventListener("keydown", (e) => {
       // Skill popup navigation
-      if (this.skillPopup && this.skillPopup.style.display !== "none") {
+      if (this.skillPopup && !this.skillPopup.hasClass("is-hidden")) {
         const items = this.skillPopup.querySelectorAll(".cc-skill-item");
         if (e.key === "ArrowDown") {
           e.preventDefault();
@@ -344,7 +358,7 @@ export class ClaudeChatView extends ItemView {
         }
         if (e.key === "Escape") {
           e.preventDefault();
-          this.skillPopup.style.display = "none";
+          this.skillPopup.addClass("is-hidden");
           return;
         }
       }
@@ -375,10 +389,9 @@ export class ClaudeChatView extends ItemView {
           // Save to temp file
           const ext = item.type.split("/")[1] || "png";
           const tmpName = `paste-${Date.now()}.${ext}`;
-          const tmpDir = require("os").tmpdir();
-          const tmpPath = require("path").join(tmpDir, tmpName);
+          const tmpPath = join(tmpdir(), tmpName);
           const buffer = Buffer.from(await blob.arrayBuffer());
-          require("fs").writeFileSync(tmpPath, buffer);
+          writeFileSync(tmpPath, buffer);
           this.attachedImages.push({ path: tmpPath, name: tmpName });
           this.renderAttachmentCards();
         }
@@ -399,16 +412,8 @@ export class ClaudeChatView extends ItemView {
       const files = e.dataTransfer?.files;
       if (!files) return;
 
-      let getPath: (f: File) => string | undefined;
-      try {
-        const { webUtils } = require("electron");
-        getPath = (f: File) => webUtils.getPathForFile(f);
-      } catch {
-        getPath = (f: File) => (f as any).path;
-      }
-
       for (const file of Array.from(files)) {
-        const filePath = getPath(file);
+        const filePath = getFilePathFromFile(file);
         if (!filePath) continue;
         this.attachedImages.push({ path: filePath, name: file.name });
       }
@@ -455,7 +460,7 @@ export class ClaudeChatView extends ItemView {
     });
 
     // Check CLI availability + pre-warm query
-    this.checkCli().then(() => this.preWarmQuery());
+    void this.checkCli().then(() => this.preWarmQuery());
   }
 
   /** Start SDK query early so first message is instant */
@@ -466,14 +471,12 @@ export class ClaudeChatView extends ItemView {
   }
 
   private async checkCli(): Promise<void> {
-    const { execFile } = require("child_process");
     const cliPath = this.settings.cliPath || "claude";
 
     // Build same env as ProcessManager
     const env = { ...process.env };
-    const home = env.HOME || require("os").homedir();
+    const home = env.HOME || homedir();
     env.HOME = home;
-    const { join } = require("path");
     const extraPaths = ["/usr/local/bin", "/opt/homebrew/bin", join(home, ".local", "bin"), "/usr/bin"];
     env.PATH = [env.PATH, ...extraPaths].filter(Boolean).join(":");
 
@@ -514,12 +517,10 @@ export class ClaudeChatView extends ItemView {
   // ── Skill Autocomplete ──
 
   /** Fetch SDK commands lazily (once, after first session starts) */
-  private async fetchSdkCommands(): Promise<void> {
+  private fetchSdkCommands(): void {
     if (this.sdkCommandsFetched) return;
-    try {
-      // Access the active query's supportedCommands — requires ProcessManager to expose it
-      // For now, we'll populate from the SDK on first system init event
-    } catch { /* ignore */ }
+    // Access the active query's supportedCommands — requires ProcessManager to expose it
+    // For now, we'll populate from the SDK on first system init event
   }
 
   /** Called when system init event arrives — fetch SDK commands */
@@ -544,13 +545,13 @@ export class ClaudeChatView extends ItemView {
     const text = this.inputEl.value;
 
     if (!text.startsWith("/")) {
-      this.skillPopup.style.display = "none";
+      this.skillPopup.addClass("is-hidden");
       return;
     }
 
     // Hide if there's a space (command already selected, user typing args)
     if (text.includes(" ")) {
-      this.skillPopup.style.display = "none";
+      this.skillPopup.addClass("is-hidden");
       return;
     }
 
@@ -598,7 +599,7 @@ export class ClaudeChatView extends ItemView {
     });
 
     if (items.length === 0) {
-      this.skillPopup.style.display = "none";
+      this.skillPopup.addClass("is-hidden");
       return;
     }
 
@@ -623,7 +624,7 @@ export class ClaudeChatView extends ItemView {
       });
     }
 
-    this.skillPopup.style.display = "block";
+    this.skillPopup.removeClass("is-hidden");
   }
 
   private highlightSkillItem(items: NodeListOf<Element>): void {
@@ -639,7 +640,7 @@ export class ClaudeChatView extends ItemView {
     // Replace the "/..." with the skill name + a trailing space
     this.inputEl.value = skillName + " ";
     this.inputEl.focus();
-    if (this.skillPopup) this.skillPopup.style.display = "none";
+    if (this.skillPopup) this.skillPopup.addClass("is-hidden");
     // Move cursor to end
     this.inputEl.selectionStart = this.inputEl.selectionEnd = this.inputEl.value.length;
   }
@@ -699,7 +700,7 @@ export class ClaudeChatView extends ItemView {
   private showLiveProgress(icon: string, text: string): void {
     if (!this.liveProgressEl) return;
     this.liveProgressEl.empty();
-    this.liveProgressEl.style.display = "flex";
+    this.liveProgressEl.removeClass("is-hidden");
 
     // Start timer if not already running
     if (!this.progressStartTime) this.progressStartTime = Date.now();
@@ -731,7 +732,7 @@ export class ClaudeChatView extends ItemView {
   /** Hide the live progress element */
   private hideLiveProgress(): void {
     if (this.liveProgressEl) {
-      this.liveProgressEl.style.display = "none";
+      this.liveProgressEl.addClass("is-hidden");
     }
     if (this.progressTimer) {
       clearInterval(this.progressTimer);
@@ -745,24 +746,15 @@ export class ClaudeChatView extends ItemView {
     const fileInput = document.createElement("input");
     fileInput.type = "file";
     fileInput.multiple = true;
-    fileInput.style.cssText = "position:fixed;top:-9999px;left:-9999px;opacity:0;";
+    fileInput.addClass("cc-offscreen-input");
     document.body.appendChild(fileInput);
 
     fileInput.addEventListener("change", () => {
       const files = fileInput.files;
       if (!files) return;
 
-      // Electron 32+: file.path is removed, use webUtils.getPathForFile()
-      let getPath: (f: File) => string | undefined;
-      try {
-        const { webUtils } = require("electron");
-        getPath = (f: File) => webUtils.getPathForFile(f);
-      } catch {
-        getPath = (f: File) => (f as any).path;
-      }
-
       for (const file of Array.from(files)) {
-        const filePath = getPath(file);
+        const filePath = getFilePathFromFile(file);
         if (!filePath) continue;
         this.attachedImages.push({ path: filePath, name: file.name });
       }
@@ -842,7 +834,7 @@ export class ClaudeChatView extends ItemView {
   private selectModel(model: ModelChoice): void {
     this.pm.model = model;
     // Notify SDK of model change at runtime (no restart needed)
-    this.pm.setModelRuntime(model);
+    void this.pm.setModelRuntime(model);
     for (const [key, btn] of Object.entries(this.modelBtns)) {
       btn.toggleClass("is-active", key === model);
     }
@@ -854,7 +846,7 @@ export class ClaudeChatView extends ItemView {
       btn.toggleClass("is-active", key === level);
     }
     if (this.pm.query) {
-      new (require("obsidian").Notice)("Effort change applies on next session", 2000);
+      new Notice("Effort change applies on next session", 2000);
     }
   }
 
@@ -870,7 +862,7 @@ export class ClaudeChatView extends ItemView {
 
     const fmtK = (n: number) => n >= 1000 ? Math.round(n / 1000) + "K" : String(n);
     this.contextLabel.textContent = `${fmtK(contextTokens)} / ${fmtK(contextWindow)} (${pct}%)`;
-    this.contextLabel.style.color = warning ? "#E57373" : "";
+    this.contextLabel.toggleClass("cc-warning-text", warning);
 
     // Tooltip with compact suggestion
     const tooltip = warning
@@ -893,7 +885,7 @@ export class ClaudeChatView extends ItemView {
         this.queuedMessage = text;
       }
       this.inputEl.value = "";
-      this.inputEl.style.height = "auto";
+      this.resetInputHeight();
       this.updateQueueIndicator();
       return;
     }
@@ -931,7 +923,7 @@ export class ClaudeChatView extends ItemView {
     }
 
     // Hide empty state
-    if (this.emptyState) this.emptyState.style.display = "none";
+    if (this.emptyState) this.emptyState.addClass("is-hidden");
 
     // Build attachment metadata for display
     const attachments: ChatMessage["attachments"] = [];
@@ -957,7 +949,7 @@ export class ClaudeChatView extends ItemView {
 
     // Clear input + context + images
     this.inputEl.value = "";
-    this.inputEl.style.height = "auto";
+    this.resetInputHeight();
     this.attachedContext = null;
     this.attachedImages = [];
     this.renderContextCard();
@@ -996,7 +988,7 @@ export class ClaudeChatView extends ItemView {
     this.currentAssistantMsg = null;
     this.currentStreamingEl = null;
     this.chatContainer.empty();
-    if (this.emptyState) this.emptyState.style.display = "none";
+    if (this.emptyState) this.emptyState.addClass("is-hidden");
 
     // Restore saved messages
     this.messages = savedMessages || [];
@@ -1129,10 +1121,10 @@ export class ClaudeChatView extends ItemView {
 
     // Only show tab bar if more than 1 tab
     if (this.tabs.length <= 1) {
-      this.tabBarEl.style.display = "none";
+      this.tabBarEl.addClass("is-hidden");
       return;
     }
-    this.tabBarEl.style.display = "flex";
+    this.tabBarEl.removeClass("is-hidden");
 
     for (const tab of this.tabs) {
       const tabEl = this.tabBarEl.createDiv(
@@ -1193,7 +1185,7 @@ export class ClaudeChatView extends ItemView {
 
   private handleSystemEvent(event: SystemInitEvent): void {
     // Compact boundary — show separator in chat
-    if ((event as any).subtype === "compact_boundary") {
+    if ((event as unknown as { subtype: string }).subtype === "compact_boundary") {
       const divider = this.chatContainer.createDiv("cc-compact-divider");
       const line = divider.createDiv("cc-compact-line");
       const label = divider.createSpan({ cls: "cc-compact-label", text: "Context compacted" });
@@ -1221,7 +1213,7 @@ export class ClaudeChatView extends ItemView {
       };
       this.updateUI();
       // Fetch SDK commands for dropdown (lazy, once)
-      this.loadSdkCommands();
+      void this.loadSdkCommands();
     }
   }
 
@@ -1235,7 +1227,7 @@ export class ClaudeChatView extends ItemView {
 
     // Ensure we have a streaming container
     if (!this.currentStreamingEl) {
-      if (this.emptyState) this.emptyState.style.display = "none";
+      if (this.emptyState) this.emptyState.addClass("is-hidden");
       this.currentStreamingEl = this.chatContainer.createDiv(
         "claude-native-msg claude-native-msg-assistant is-streaming"
       );
@@ -1280,7 +1272,7 @@ export class ClaudeChatView extends ItemView {
 
     // Ensure container exists
     if (!this.currentStreamingEl) {
-      if (this.emptyState) this.emptyState.style.display = "none";
+      if (this.emptyState) this.emptyState.addClass("is-hidden");
       this.currentStreamingEl = this.chatContainer.createDiv(
         "claude-native-msg claude-native-msg-assistant is-streaming"
       );
@@ -1479,9 +1471,9 @@ export class ClaudeChatView extends ItemView {
         ? this.queuedMessage.slice(0, 40) + "…"
         : this.queuedMessage;
       this.queueIndicatorEl.textContent = `Queued: ${preview}`;
-      this.queueIndicatorEl.style.display = "block";
+      this.queueIndicatorEl.removeClass("is-hidden");
     } else {
-      this.queueIndicatorEl.style.display = "none";
+      this.queueIndicatorEl.addClass("is-hidden");
     }
   }
 
@@ -1527,9 +1519,9 @@ export class ClaudeChatView extends ItemView {
       if (inputPreview.length > 10) {
         const detailPre = card.createEl("pre", { cls: "cc-permission-input" });
         detailPre.textContent = inputPreview.length > 300 ? inputPreview.slice(0, 300) + "…" : inputPreview;
-        detailPre.style.display = "none";
+        detailPre.addClass("is-hidden");
         detailSummary.addEventListener("click", () => {
-          detailPre.style.display = detailPre.style.display === "none" ? "block" : "none";
+          detailPre.toggleClass("is-hidden", !detailPre.hasClass("is-hidden"));
         });
       }
 
@@ -1723,11 +1715,11 @@ export class ClaudeChatView extends ItemView {
         const chevron = header.createSpan("cc-thinking-chevron");
         setIcon(chevron, "chevron-right");
         const content = panel.createDiv("cc-thinking-content");
-        content.style.display = "none";
+        content.addClass("is-hidden");
         content.createEl("pre", { text: tc.result.slice(0, 2000) + (tc.result.length > 2000 ? "\n…" : "") });
         header.addEventListener("click", () => {
-          const open = content.style.display !== "none";
-          content.style.display = open ? "none" : "block";
+          const open = !content.hasClass("is-hidden");
+          content.toggleClass("is-hidden", open);
           chevron.empty();
           setIcon(chevron, open ? "chevron-right" : "chevron-down");
         });
@@ -1802,7 +1794,7 @@ export class ClaudeChatView extends ItemView {
     setIcon(chevron, "chevron-right");
 
     const details = panel.createDiv("claude-native-tool-details");
-    details.style.display = "none";
+    details.addClass("is-hidden");
 
     const inputPre = details.createEl("pre", { cls: "claude-native-tool-input" });
     inputPre.createEl("code", { text: JSON.stringify(tc.input, null, 2) });
@@ -1815,8 +1807,8 @@ export class ClaudeChatView extends ItemView {
     }
 
     header.addEventListener("click", () => {
-      const isOpen = details.style.display !== "none";
-      details.style.display = isOpen ? "none" : "block";
+      const isOpen = !details.hasClass("is-hidden");
+      details.toggleClass("is-hidden", isOpen);
       chevron.empty();
       setIcon(chevron, isOpen ? "chevron-right" : "chevron-down");
     });
@@ -1826,10 +1818,10 @@ export class ClaudeChatView extends ItemView {
    * Edit is auto-applied (acceptEdits). Show diff in chat + open file with undo banner.
    */
   private renderEditDiff(parent: HTMLElement, tc: ToolCallInfo): void {
-    const filePath = String(tc.input.file_path || "");
+    const filePath = typeof tc.input.file_path === "string" ? tc.input.file_path : "";
     const fileName = filePath.split("/").pop() || "unknown";
-    const oldStr = String(tc.input.old_string || "");
-    const newStr = String(tc.input.new_string || "");
+    const oldStr = typeof tc.input.old_string === "string" ? tc.input.old_string : "";
+    const newStr = typeof tc.input.new_string === "string" ? tc.input.new_string : "";
 
     // Compact indicator in chat
     const panel = parent.createDiv("claude-native-diff");
@@ -1870,7 +1862,7 @@ export class ClaudeChatView extends ItemView {
     }
 
     // Ensure file is in editing mode (reading mode has no editor)
-    const leafView = leaf.view as any;
+    const leafView = leaf.view as ItemView & { getMode?: () => string };
     if (leafView?.getMode?.() === "preview") {
       // Switch to editing mode
       const state = leaf.getViewState();
@@ -2036,12 +2028,12 @@ export class ClaudeChatView extends ItemView {
     const running = this.pm.isRunning;
 
     // Header buttons
-    if (this.abortBtn) this.abortBtn.style.display = running ? "flex" : "none";
-    if (this.newSessionBtn) this.newSessionBtn.style.display = running ? "none" : "flex";
+    if (this.abortBtn) this.abortBtn.toggleClass("is-hidden", !running);
+    if (this.newSessionBtn) this.newSessionBtn.toggleClass("is-hidden", running);
 
     // Bottom row: toggle send/stop buttons
-    if (this.sendBtn) this.sendBtn.style.display = running ? "none" : "flex";
-    if (this._stopBtn) this._stopBtn.style.display = running ? "flex" : "none";
+    if (this.sendBtn) this.sendBtn.toggleClass("is-hidden", running);
+    if (this._stopBtn) this._stopBtn.toggleClass("is-hidden", !running);
 
     // Status bar
     if (!this.statusBar) return;
@@ -2067,6 +2059,17 @@ export class ClaudeChatView extends ItemView {
 
     this.statusBar.textContent = parts.length > 0 ? parts.join(" · ") : "Ready";
     this.statusBar.className = "claude-native-status" + (this.session ? " is-connected" : "");
+  }
+
+  /** Reset textarea height to auto (used after sending) */
+  private resetInputHeight(): void {
+    this.inputEl.style.height = "auto";
+  }
+
+  /** Auto-resize textarea to fit content */
+  private autoResizeInput(): void {
+    this.inputEl.style.height = "auto";
+    this.inputEl.style.height = Math.min(this.inputEl.scrollHeight, 160) + "px";
   }
 
   private scrollToBottom(): void {

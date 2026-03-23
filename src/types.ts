@@ -182,7 +182,7 @@ export const SKILL_CATALOG: SkillDef[] = [
 
 export const CATEGORY_LABELS: Record<string, string> = {
   research: "Research",
-  writing: "Writing & Editing",
+  writing: "Writing & editing",
   analysis: "Analysis",
   transform: "Transform",
 };

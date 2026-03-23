@@ -7,7 +7,8 @@ import { inlineDiffField } from "./editor-extension";
 import { existsSync, writeFileSync, unlinkSync, mkdirSync, readFileSync, readdirSync, watch } from "fs";
 import { join } from "path";
 import { homedir } from "os";
-// exec removed — using electron.shell.openPath instead
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { shell } = require("electron") as { shell: { openPath: (path: string) => Promise<string> } };
 
 // Skill contents bundled at build time (esbuild loader: { ".md": "text" })
 // @ts-ignore
@@ -42,10 +43,16 @@ const SKILLS_DIR = join(homedir(), ".claude", "commands");
 
 export default class ClaudeNativePlugin extends Plugin {
   settings: ClaudeNativeSettings = DEFAULT_SETTINGS;
-  private view: ClaudeChatView | null = null;
 
   // Skill file contents (bundled at build time or read from plugin dir)
   private skillContents: Record<string, string> = {};
+
+  /** Get the active chat view via getLeavesOfType (avoids memory leak) */
+  private getChatView(): ClaudeChatView | null {
+    const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_CLAUDE);
+    if (leaves.length > 0) return leaves[0].view as ClaudeChatView;
+    return null;
+  }
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -54,23 +61,23 @@ export default class ClaudeNativePlugin extends Plugin {
 
     // Register the chat view
     this.registerView(VIEW_TYPE_CLAUDE, (leaf) => {
-      this.view = new ClaudeChatView(leaf, this.settings);
+      const view = new ClaudeChatView(leaf, this.settings);
       // Wire up session saving
-      this.view.onSaveSession = (session) => this.saveSession(session);
-      this.view.onShowSessionPicker = () => this.showSessionPicker();
-      return this.view;
+      view.onSaveSession = (session) => this.saveSession(session);
+      view.onShowSessionPicker = () => this.showSessionPicker();
+      return view;
     });
 
     // Ribbon icon
     this.addRibbonIcon("cat", "KatmerCode", () => {
-      this.activateView();
+      void this.activateView();
     });
 
     // Commands
     this.addCommand({
       id: "open-claude-chat",
       name: "Open Claude Code chat",
-      callback: () => this.activateView(),
+      callback: () => void this.activateView(),
     });
 
     this.addCommand({
@@ -78,14 +85,14 @@ export default class ClaudeNativePlugin extends Plugin {
       name: "New Claude Code session",
       callback: async () => {
         await this.activateView();
-        this.view?.startNewSession();
+        this.getChatView()?.startNewSession();
       },
     });
 
     this.addCommand({
       id: "resume-claude-session",
       name: "Resume Claude Code session",
-      callback: () => this.showSessionPicker(),
+      callback: () => void this.showSessionPicker(),
     });
 
     // Register report viewer
@@ -94,7 +101,7 @@ export default class ClaudeNativePlugin extends Plugin {
     this.addCommand({
       id: "open-report",
       name: "Open HTML report in viewer",
-      callback: () => this.pickAndOpenReport(),
+      callback: () => void this.pickAndOpenReport(),
     });
 
     // Watch reports/ for new HTML files
@@ -107,11 +114,11 @@ export default class ClaudeNativePlugin extends Plugin {
     this.addSettingTab(new ClaudeNativeSettingTab(this.app, this));
   }
 
-  private _reportWatcher: any = null;
+  private _reportWatcher: ReturnType<typeof watch> | null = null;
 
   onunload(): void {
     // Clean up persistent CLI process
-    this.view?.onClose();
+    void this.getChatView()?.onClose();
     // Skills stay installed — they're global (~/.claude/commands/) and useful outside the plugin.
     // Removing them on every Obsidian quit would break the "available in all sessions" promise.
     // Skills are only removed when explicitly disabled in settings (syncSkills handles that).
@@ -142,14 +149,14 @@ export default class ClaudeNativePlugin extends Plugin {
   async openReport(filePath: string): Promise<void> {
     const leaf = this.app.workspace.getLeaf("tab");
     await leaf.setViewState({ type: VIEW_TYPE_REPORT, active: true });
-    const rv = leaf.view as any;
+    const rv = leaf.view as unknown as ReportView;
     if (rv?.loadReport) await rv.loadReport(filePath);
     this.app.workspace.revealLeaf(leaf);
   }
 
   private async pickAndOpenReport(): Promise<void> {
     const reportsDir = join(
-      (this.app.vault.adapter as any).basePath || "", "reports"
+      (this.app.vault.adapter as { basePath?: string }).basePath || "", "reports"
     );
     try {
       const files = readdirSync(reportsDir)
@@ -168,7 +175,7 @@ export default class ClaudeNativePlugin extends Plugin {
 
   private setupReportWatcher(): void {
     const reportsDir = join(
-      (this.app.vault.adapter as any).basePath || "", "reports"
+      (this.app.vault.adapter as { basePath?: string }).basePath || "", "reports"
     );
     try {
       if (!existsSync(reportsDir)) mkdirSync(reportsDir, { recursive: true });
@@ -195,14 +202,14 @@ export default class ClaudeNativePlugin extends Plugin {
             cls: "katmer-report-notice-btn katmer-report-notice-btn-primary",
             text: "Open in Obsidian",
           });
-          openBtn.addEventListener("click", () => { this.openReport(fullPath); notice.hide(); });
+          openBtn.addEventListener("click", () => { void this.openReport(fullPath); notice.hide(); });
 
           const browserBtn = btnRow.createEl("button", {
             cls: "katmer-report-notice-btn",
             text: "Open in browser",
           });
           browserBtn.addEventListener("click", () => {
-            require("electron").shell.openPath(fullPath);
+            shell.openPath(fullPath);
             notice.hide();
           });
 
@@ -287,7 +294,7 @@ export default class ClaudeNativePlugin extends Plugin {
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
-    this.view?.updateSettings(this.settings);
+    this.getChatView()?.updateSettings(this.settings);
   }
 
   /** Save or update a session in history */
@@ -316,7 +323,7 @@ export default class ClaudeNativePlugin extends Plugin {
     }
 
     const modal = new SessionPickerModal(this.app, this.settings.sessions, (session) => {
-      this.view?.resumeSession(session.sessionId, session.messages);
+      this.getChatView()?.resumeSession(session.sessionId, session.messages);
     });
     modal.open();
   }

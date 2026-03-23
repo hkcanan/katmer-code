@@ -1151,3 +1151,17 @@
   opacity: 0.6; white-space: nowrap;
   text-transform: uppercase; letter-spacing: 0.5px;
 }
+
+/* ── Utility: hidden toggle ── */
+.is-hidden { display: none !important; }
+
+/* ── Warning text color ── */
+.cc-warning-text { color: #E57373; }
+
+/* ── Off-screen file input ── */
+.cc-offscreen-input {
+  position: fixed;
+  top: -9999px;
+  left: -9999px;
+  opacity: 0;
+}

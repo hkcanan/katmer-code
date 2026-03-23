@@ -15,10 +15,10 @@ export class ClaudeNativeSettingTab extends PluginSettingTab {
     containerEl.empty();
 
     // ── General ──
-    containerEl.createEl("h2", { text: "KatmerCode Settings" });
+    containerEl.createEl("h2", { text: "KatmerCode settings" });
 
     new Setting(containerEl)
-      .setName("CLI Path")
+      .setName("CLI path")
       .setDesc("Path to the Claude Code CLI executable")
       .addText((text) =>
         text
@@ -31,7 +31,7 @@ export class ClaudeNativeSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Working Directory")
+      .setName("Working directory")
       .setDesc("Default working directory for Claude sessions (empty = vault root)")
       .addText((text) =>
         text
@@ -44,7 +44,7 @@ export class ClaudeNativeSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Default Model")
+      .setName("Default model")
       .setDesc("Model used for new sessions")
       .addDropdown((dropdown) =>
         dropdown
@@ -62,14 +62,14 @@ export class ClaudeNativeSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Permission Mode")
-      .setDesc("How Claude handles tool approvals. 'Accept Edits' auto-approves file changes only.")
+      .setName("Permission mode")
+      .setDesc("How Claude handles tool approvals. 'Accept edits' auto-approves file changes only.")
       .addDropdown((dropdown) =>
         dropdown
           .addOptions({
             default: "Default (ask for everything)",
-            acceptEdits: "Accept Edits (auto-approve file changes)",
-            bypassPermissions: "Bypass All (auto-approve everything)",
+            acceptEdits: "Accept edits (auto-approve file changes)",
+            bypassPermissions: "Bypass all (auto-approve everything)",
           })
           .setValue(this.plugin.settings.permissionMode)
           .onChange(async (value) => {
@@ -79,7 +79,7 @@ export class ClaudeNativeSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Allow Web Requests")
+      .setName("Allow web requests")
       .setDesc("Auto-approve WebFetch, WebSearch, curl, python3, and open commands. Required for academic skills (/lit-search, /cite-verify, etc.)")
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.allowWebRequests).onChange(async (value) => {
@@ -89,7 +89,7 @@ export class ClaudeNativeSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Show Tool Calls")
+      .setName("Show tool calls")
       .setDesc("Display tool call panels (Read, Edit, Bash, etc.)")
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.showToolCalls).onChange(async (value) => {
@@ -99,7 +99,7 @@ export class ClaudeNativeSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Show Cost Info")
+      .setName("Show cost info")
       .setDesc("Display token usage and cost in the status bar")
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.showCostInfo).onChange(async (value) => {
@@ -109,7 +109,7 @@ export class ClaudeNativeSettingTab extends PluginSettingTab {
       );
 
     // ── Skills ──
-    containerEl.createEl("h2", { text: "Academic Skills" });
+    containerEl.createEl("h2", { text: "Academic skills" });
     containerEl.createEl("p", {
       text: "Enable skills to add slash commands to Claude Code. Enabled skills are installed to ~/.claude/commands/ and available in all sessions.",
       cls: "setting-item-description",
@@ -117,9 +117,9 @@ export class ClaudeNativeSettingTab extends PluginSettingTab {
 
     // Bulk actions
     new Setting(containerEl)
-      .setName("Bulk Actions")
+      .setName("Bulk actions")
       .addButton((btn) =>
-        btn.setButtonText("Enable All").onClick(async () => {
+        btn.setButtonText("Enable all").onClick(async () => {
           this.plugin.settings.enabledSkills = SKILL_CATALOG.map(s => s.id);
           if (!this.plugin.settings.allowWebRequests) {
             this.plugin.settings.allowWebRequests = true;
@@ -133,7 +133,7 @@ export class ClaudeNativeSettingTab extends PluginSettingTab {
         })
       )
       .addButton((btn) =>
-        btn.setButtonText("Disable All").onClick(async () => {
+        btn.setButtonText("Disable all").onClick(async () => {
           this.plugin.settings.enabledSkills = [];
           await this.plugin.saveSettings();
           await this.plugin.syncSkills();
@@ -165,7 +165,7 @@ export class ClaudeNativeSettingTab extends PluginSettingTab {
                 }
                 // Warn if web access not enabled (most skills need it)
                 if (!this.plugin.settings.allowWebRequests && skill.id !== "abstract" && skill.id !== "report-template") {
-                  new Notice("This skill uses web APIs (CrossRef, Semantic Scholar, etc.). Enable \"Allow Web Requests\" above for it to work.", 8000);
+                  new Notice("This skill uses web APIs (CrossRef, Semantic Scholar, etc.). Enable \"Allow web requests\" above for it to work.", 8000);
                 }
               } else {
                 this.plugin.settings.enabledSkills =

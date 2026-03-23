@@ -1,4 +1,5 @@
 import { ItemView, WorkspaceLeaf } from "obsidian";
+import { readFileSync } from "fs";
 
 export const VIEW_TYPE_REPORT = "katmer-report-view";
 
@@ -11,11 +12,11 @@ export class ReportView extends ItemView {
     super(leaf);
   }
 
-  getViewType() { return VIEW_TYPE_REPORT; }
-  getDisplayText() { return this.fileName || "Report"; }
-  getIcon() { return "file-chart"; }
+  getViewType(): string { return VIEW_TYPE_REPORT; }
+  getDisplayText(): string { return this.fileName || "Report"; }
+  getIcon(): string { return "file-chart"; }
 
-  async onOpen() {
+  async onOpen(): Promise<void> {
     const container = this.containerEl.children[1] as HTMLElement;
     container.empty();
     container.addClass("katmer-report-root");
@@ -26,12 +27,12 @@ export class ReportView extends ItemView {
     if (this.filePath) this.loadReport(this.filePath);
   }
 
-  async loadReport(filePath: string) {
+  async loadReport(filePath: string): Promise<void> {
     this.filePath = filePath;
     this.fileName = filePath.split("/").pop() || "Report";
-    (this.leaf as any).updateHeader?.();
+    (this.leaf as WorkspaceLeaf & { updateHeader?: () => void }).updateHeader?.();
     try {
-      const content = require("fs").readFileSync(filePath, "utf-8");
+      const content = readFileSync(filePath, "utf-8");
       if (this.frameEl) this.frameEl.srcdoc = content;
     } catch {
       const container = this.containerEl.children[1] as HTMLElement;
@@ -43,5 +44,5 @@ export class ReportView extends ItemView {
     }
   }
 
-  async onClose() {}
+  async onClose(): Promise<void> { /* no-op */ }
 }

@@ -1,7 +1,7 @@
 import { spawn, execFileSync } from "child_process";
 import { join, dirname } from "path";
 import { existsSync } from "fs";
-import { homedir } from "os";
+import { homedir, userInfo } from "os";
 import type {
   ClaudeEvent,
   ClaudeNativeSettings,
@@ -232,7 +232,7 @@ export class ProcessManager {
     const env: Record<string, string | undefined> = { ...process.env };
     const home = env.HOME || homedir();
     env.HOME = home;
-    env.USER = env.USER || require("os").userInfo().username;
+    env.USER = env.USER || userInfo().username;
     env.PATH = getEnhancedPath();
     return env;
   }
@@ -410,7 +410,7 @@ export class ProcessManager {
       });
 
       // Start consuming events in background
-      this.consumeEvents();
+      void this.consumeEvents();
       return true;
     } catch (err) {
       console.error("[katmer-code] SDK query start error:", err);
@@ -572,7 +572,7 @@ export class ProcessManager {
     if (this.activeQuery) return;
     if (workingDirectory) this.cwd = workingDirectory;
     // Start query but stay in idle state (not "running")
-    this.startQuery().then(() => {
+    void this.startQuery().then(() => {
       if (this._state === "running") this.setState("idle");
     });
   }
@@ -599,7 +599,7 @@ export class ProcessManager {
     };
 
     if (!this.activeQuery) {
-      this.startQuery().then((ok) => {
+      void this.startQuery().then((ok) => {
         if (ok) {
           this.channel?.enqueue(userMsg);
         }
