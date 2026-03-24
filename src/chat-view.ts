@@ -49,6 +49,12 @@ interface TabState {
   sessionId: string | null;
   firstMessageText: string;
   turnCount: number;
+  pm: ProcessManager;
+  /** Queued permission requests for background tabs */
+  pendingPermissions: Array<{
+    info: { toolName: string; input: Record<string, unknown>; title?: string; displayName?: string; description?: string };
+    resolve: (result: "allow" | "deny" | "always") => void;
+  }>;
 }
 
 export class ClaudeChatView extends ItemView {
@@ -707,7 +713,7 @@ export class ClaudeChatView extends ItemView {
   }
 
   /** Update progress indicator — both status bar and inline chat */
-  private updateProgress(toolName: string, input: Record<string, unknown>): void {
+  private updateProgress(toolName: string, input: Record<string, unknown>, isSubagent = false): void {
     let detail = "";
     let icon = "loader";
 
@@ -740,13 +746,17 @@ export class ClaudeChatView extends ItemView {
       detail = input.description.slice(0, 40);
       icon = "cpu";
     } else if (toolName === "Thinking") {
-      this.currentActivity = "Thinking…";
-      this.showLiveProgress("cat", "Thinking…");
-      this.updateUI();
+      // Don't override subagent progress with "Thinking..."
+      if (!this.currentActivity.startsWith("Subagent")) {
+        this.currentActivity = "Thinking…";
+        this.showLiveProgress("cat", "Thinking…");
+        this.updateUI();
+      }
       return;
     }
 
-    this.currentActivity = detail ? `${toolName}: ${detail}` : toolName;
+    const prefix = isSubagent ? "Subagent " : "";
+    this.currentActivity = detail ? `${prefix}${toolName}: ${detail}` : `${prefix}${toolName}`;
     this.showLiveProgress(icon, this.currentActivity);
     this.updateUI();
   }
@@ -879,13 +889,19 @@ export class ClaudeChatView extends ItemView {
   }
 
   onClose(): Promise<void> {
-    this.pm.destroy();
+    // Destroy ALL tab PMs
+    for (const tab of this.tabs) {
+      tab.pm.destroy();
+    }
     return Promise.resolve();
   }
 
   updateSettings(settings: ClaudeNativeSettings): void {
     this.settings = settings;
-    this.pm.updateSettings(settings);
+    // Update ALL tab PMs
+    for (const tab of this.tabs) {
+      tab.pm.updateSettings(settings);
+    }
   }
 
   // ── Model & Thinking selectors ──
@@ -894,6 +910,10 @@ export class ClaudeChatView extends ItemView {
     this.pm.model = model;
     // Notify SDK of model change at runtime (no restart needed)
     void this.pm.setModelRuntime(model);
+    // Also update all future tab PMs to use this model
+    for (const tab of this.tabs) {
+      tab.pm.model = model;
+    }
     for (const [key, btn] of Object.entries(this.modelBtns)) {
       btn.toggleClass("is-active", key === model);
     }
@@ -1064,6 +1084,121 @@ export class ClaudeChatView extends ItemView {
     this.updateUI();
   }
 
+  // ── PM wiring helpers ──
+
+  /** Create a new ProcessManager for a tab */
+  private createPM(): ProcessManager {
+    const pm = new ProcessManager(this.settings);
+    pm.model = this.pm?.model || this.settings.defaultModel || "sonnet";
+    pm.effort = this.pm?.effort || "high";
+    return pm;
+  }
+
+  /** Wire PM as the active foreground PM — events render to DOM */
+  private wirePM(pm: ProcessManager): void {
+    pm.onEvent = (e) => this.handleEvent(e);
+    pm.onStateChange = () => this.updateUI();
+    pm.onComplete = () => this.onResponseComplete();
+    pm.onPermissionRequest = (info) => this.showPermissionPrompt(info);
+    pm.onStderr = (text) => {
+      const ignore = ["CPU lacks AVX", "warn:", "no stdin data", "Warning:", "deprecat"];
+      if (!ignore.some(w => text.includes(w))) {
+        if (text.includes("not logged in") || text.includes("authenticate") || text.includes("API key") || text.includes("unauthorized")) {
+          this.showError("Not logged in. Please run `claude` in your terminal first to authenticate, then reload this plugin.");
+        } else if (text.includes("Prompt is too long") || text.includes("prompt is too long") || text.includes("context_length_exceeded")) {
+          this.showContextFullError();
+        } else {
+          console.error("[katmer-code] stderr:", text);
+          this.showError(text);
+        }
+      }
+    };
+  }
+
+  /** Wire PM as a background PM — accumulates messages in tab state but doesn't touch DOM */
+  private wireBackgroundPM(pm: ProcessManager, tab: TabState): void {
+    pm.onEvent = (e) => {
+      // Accumulate assistant messages into tab.messages (minimal handling)
+      if (e.type === "assistant") {
+        const aEvent = e as AssistantMessageEvent;
+        if (aEvent.parent_tool_use_id) return; // skip subagent
+        const content = aEvent.message?.content;
+        if (!content || !Array.isArray(content)) return;
+
+        // Find or create the current assistant message in tab.messages
+        let lastMsg = tab.messages[tab.messages.length - 1];
+        if (!lastMsg || lastMsg.role !== "assistant") {
+          lastMsg = {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: "",
+            toolCalls: [],
+            segments: [],
+            timestamp: Date.now(),
+            isStreaming: true,
+          };
+          tab.messages.push(lastMsg);
+        }
+        // Accumulate text content
+        for (const block of content) {
+          if (block.type === "text" && block.text) {
+            // Only set (not append) — SDK sends cumulative content
+            lastMsg.content = block.text;
+          }
+        }
+      } else if (e.type === "result") {
+        // Mark last assistant message as done
+        const lastMsg = tab.messages[tab.messages.length - 1];
+        if (lastMsg && lastMsg.role === "assistant") {
+          lastMsg.isStreaming = false;
+        }
+        // Update session cost/usage
+        const rEvent = e as ResultEvent;
+        if (tab.session) {
+          tab.session.totalCost += rEvent.total_cost_usd || 0;
+        }
+        tab.turnCount++;
+      } else if (e.type === "system") {
+        const sEvent = e as SystemInitEvent;
+        if (sEvent.subtype === "init") {
+          tab.session = {
+            sessionId: sEvent.session_id,
+            model: sEvent.model || "unknown",
+            mcpServers: sEvent.mcp_servers || [],
+            cliVersion: sEvent.claude_code_version || "",
+            totalCost: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            contextWindow: 200000,
+            cacheReadTokens: 0,
+            cacheCreationTokens: 0,
+          };
+          tab.sessionId = sEvent.session_id;
+        }
+      }
+    };
+    pm.onStateChange = () => this.renderTabBar(); // update running indicator
+    pm.onComplete = () => this.renderTabBar();
+    pm.onStderr = null;
+    // Permission requests: queue them for when tab becomes active
+    pm.onPermissionRequest = (info) => {
+      return new Promise<"allow" | "deny" | "always">((resolve) => {
+        tab.pendingPermissions.push({ info, resolve });
+        // Show a notice so user knows
+        new Notice(`Tab "${tab.title}" needs permission for ${info.toolName}`, 5000);
+      });
+    };
+  }
+
+  /** Unwire all handlers from a PM */
+  private unwirePM(pm: ProcessManager): void {
+    pm.onEvent = null;
+    pm.onStateChange = null;
+    pm.onComplete = null;
+    pm.onPermissionRequest = null;
+    pm.onStderr = null;
+  }
+
   // ── Tab management ──
 
   private createInitialTab(): void {
@@ -1075,6 +1210,8 @@ export class ClaudeChatView extends ItemView {
       sessionId: null,
       firstMessageText: "",
       turnCount: 0,
+      pm: this.pm,
+      pendingPermissions: [],
     };
     this.tabs = [tab];
     this.activeTabId = tab.id;
@@ -1084,6 +1221,9 @@ export class ClaudeChatView extends ItemView {
     // Save current tab state
     this.saveActiveTabState();
 
+    // Create a new PM for this tab
+    const newPm = this.createPM();
+
     const tab: TabState = {
       id: crypto.randomUUID(),
       title: "New chat",
@@ -1092,6 +1232,8 @@ export class ClaudeChatView extends ItemView {
       sessionId: null,
       firstMessageText: "",
       turnCount: 0,
+      pm: newPm,
+      pendingPermissions: [],
     };
     this.tabs.push(tab);
     this.switchToTab(tab.id);
@@ -1103,6 +1245,12 @@ export class ClaudeChatView extends ItemView {
 
     // Save current tab
     this.saveActiveTabState();
+
+    // Wire old tab's PM as background (keeps running but doesn't touch DOM)
+    const oldTab = this.tabs.find(t => t.id === this.activeTabId);
+    if (oldTab) {
+      this.wireBackgroundPM(oldTab.pm, oldTab);
+    }
 
     // Load new tab
     this.activeTabId = tabId;
@@ -1117,15 +1265,34 @@ export class ClaudeChatView extends ItemView {
     this.currentStreamingEl = null;
     this.streamingTextEl = null;
     this.streamingText = "";
+    this._renderedToolIds.clear();
+    this._renderedTextHashes.clear();
+    this._renderedThinkingCount = 0;
+    this._lastAssistantMsgId = "";
 
-    // Switch SDK session
-    this.pm.newSession();
-    if (tab.sessionId) {
-      this.pm.setSessionId(tab.sessionId);
+    // Switch to new tab's PM
+    this.pm = tab.pm;
+    this.wirePM(this.pm);
+
+    // Pre-warm if this PM has no active query yet
+    if (!this.pm.query && !tab.sessionId) {
+      const vaultPath = (this.app.vault.adapter as { basePath?: string }).basePath;
+      const cwd = this.settings.workingDirectory || vaultPath || undefined;
+      this.pm.warmUp(cwd);
+    }
+
+    // Process any pending permission requests from background execution
+    if (tab.pendingPermissions.length > 0) {
+      const pending = tab.pendingPermissions.shift()!;
+      void this.showPermissionPrompt(pending.info).then(pending.resolve);
     }
 
     // Re-render chat
     this.chatContainer.empty();
+    // Recreate live progress element
+    this.liveProgressEl = this.chatContainer.createDiv("cc-live-progress");
+    this.liveProgressEl.addClass("is-hidden");
+
     if (this.messages.length === 0) {
       this.emptyState = this.chatContainer.createDiv("claude-native-empty");
       this.emptyState.empty();
@@ -1138,6 +1305,11 @@ export class ClaudeChatView extends ItemView {
       }
     }
 
+    // If the tab's PM is running, show progress indicator
+    if (this.pm.isRunning) {
+      this.showLiveProgress("cat", this.currentActivity || "Thinking...");
+    }
+
     this.renderTabBar();
     this.updateUI();
     this.updateContextBar();
@@ -1148,6 +1320,16 @@ export class ClaudeChatView extends ItemView {
 
     const idx = this.tabs.findIndex(t => t.id === tabId);
     if (idx === -1) return;
+
+    // Destroy the tab's PM (kills subprocess)
+    const closingTab = this.tabs[idx];
+    if (closingTab.pm !== this.pm) {
+      closingTab.pm.destroy();
+    }
+    // Reject any pending permissions
+    for (const p of closingTab.pendingPermissions) {
+      p.resolve("deny");
+    }
 
     this.tabs.splice(idx, 1);
 
@@ -1186,8 +1368,10 @@ export class ClaudeChatView extends ItemView {
     this.tabBarEl.removeClass("is-hidden");
 
     for (const tab of this.tabs) {
+      const isActive = tab.id === this.activeTabId;
+      const isRunning = tab.pm?.isRunning || false;
       const tabEl = this.tabBarEl.createDiv(
-        "cc-tab" + (tab.id === this.activeTabId ? " is-active" : "")
+        "cc-tab" + (isActive ? " is-active" : "") + (isRunning ? " is-running" : "")
       );
 
       tabEl.createSpan({ cls: "cc-tab-title", text: tab.title });
@@ -1304,8 +1488,18 @@ export class ClaudeChatView extends ItemView {
   }
 
   private handleAssistantEvent(event: AssistantMessageEvent): void {
-    // Skip subagent messages — only show main agent's output
-    if (event.parent_tool_use_id) return;
+    // Subagent messages — don't render in chat, but show tool calls in progress indicator
+    if (event.parent_tool_use_id) {
+      const content = event.message?.content;
+      if (content && Array.isArray(content)) {
+        for (const block of content) {
+          if (block.type === "tool_use" && block.name) {
+            this.updateProgress(block.name, block.input as Record<string, unknown>, true);
+          }
+        }
+      }
+      return;
+    }
 
     // Update context usage from each main-agent assistant message
     // contextTokens = input + cache_creation + cache_read (all consume context window)
@@ -2090,9 +2284,8 @@ export class ClaudeChatView extends ItemView {
   private updateUI(): void {
     const running = this.pm.isRunning;
 
-    // Header buttons
+    // Header buttons — abort only when running, new tab always visible
     if (this.abortBtn) this.abortBtn.toggleClass("is-hidden", !running);
-    if (this.newSessionBtn) this.newSessionBtn.toggleClass("is-hidden", running);
 
     // Bottom row: toggle send/stop buttons
     if (this.sendBtn) this.sendBtn.toggleClass("is-hidden", running);

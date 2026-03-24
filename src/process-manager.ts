@@ -534,7 +534,9 @@ export class ProcessManager {
       case "stream_event": {
         // Partial streaming — extract text delta for live rendering
         const streamMsg = msg as { type: "stream_event"; event: Record<string, unknown>; parent_tool_use_id: string | null };
-        if (streamMsg.parent_tool_use_id) break; // skip subagent streams
+
+        // Subagent text streams are skipped (chat-view handles subagent tool calls via assistant events)
+        if (streamMsg.parent_tool_use_id) break;
 
         const ev = streamMsg.event;
         if (ev && ev.type === "content_block_delta") {

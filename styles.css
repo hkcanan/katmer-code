@@ -100,7 +100,9 @@
 .claude-native-context-row {
   display: flex;
   align-items: center;
-  margin-bottom: 4px;
+  margin-top: 6px;
+  margin-bottom: 2px;
+  padding: 0 8px;
 }
 .claude-native-context-label {
   font-family: var(--cc-mono);
@@ -1044,27 +1046,42 @@
 .cc-tab-bar {
   display: flex; gap: 2px; padding: 0 8px;
   overflow-x: auto; scrollbar-width: none;
-  border-bottom: 1px solid var(--background-modifier-border);
+  margin-top: 6px;
 }
 .cc-tab-bar::-webkit-scrollbar { display: none; }
 .cc-tab {
-  display: flex; align-items: center; gap: 4px;
-  padding: 5px 8px; border-radius: 6px 6px 0 0;
+  display: flex; align-items: center; gap: 5px;
+  padding: 5px 12px; border-radius: 6px;
   font-size: 12px; cursor: pointer; white-space: nowrap;
   color: var(--text-muted); background: transparent;
-  border: 1px solid transparent; border-bottom: none;
-  max-width: 160px; min-width: 60px;
+  border: 1px solid transparent;
+  max-width: 180px; min-width: 70px;
+  transition: all 120ms ease;
 }
-.cc-tab:hover { background: var(--background-secondary); }
+.cc-tab:hover {
+  background: rgba(0,0,0,0.04);
+}
+.theme-dark .cc-tab:hover { background: rgba(255,255,255,0.04); }
 .cc-tab.is-active {
-  background: var(--background-primary);
-  color: var(--text-normal); font-weight: 500;
+  background: rgba(0,0,0,0.06);
+  color: var(--text-normal); font-weight: 600;
   border-color: var(--background-modifier-border);
-  position: relative;
 }
-.cc-tab.is-active::after {
-  content: ""; position: absolute; bottom: -1px; left: 0; right: 0;
-  height: 1px; background: var(--background-primary);
+.theme-dark .cc-tab.is-active { background: rgba(255,255,255,0.06); }
+/* Running indicator — pulsing dot before title */
+.cc-tab.is-running .cc-tab-title::before {
+  content: "";
+  display: inline-block;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--cc-accent, #C45A3C);
+  margin-right: 5px;
+  vertical-align: middle;
+  animation: cc-tab-pulse 1.5s ease-in-out infinite;
+}
+@keyframes cc-tab-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
 }
 .cc-tab-title {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -1072,6 +1089,7 @@
 .cc-tab-close {
   flex-shrink: 0; opacity: 0; color: var(--text-faint);
   display: flex; align-items: center;
+  transition: opacity 100ms;
 }
 .cc-tab-close svg { width: 12px; height: 12px; }
 .cc-tab:hover .cc-tab-close { opacity: 0.5; }
