@@ -191,53 +191,58 @@ const changeDecorations = StateField.define<DecorationSet>({
     if (pending.length === 0) return Decoration.none;
 
     const sorted = [...pending].sort((a, b) => a.from - b.from);
-    const builder = new RangeSetBuilder<Decoration>();
     const docLen = tr.state.doc.length;
+
+    // Collect all decorations first, then sort for RangeSetBuilder
+    const decos: { from: number; to: number; deco: Decoration; sortSide: number }[] = [];
 
     for (const change of sorted) {
       const { from, to, originalText, newText, id } = change;
       if (from < 0 || to > docLen || from > to) continue;
 
-      // Compute semantic diff between old and new
       const diffs = semanticDiff(originalText, newText);
-
-      // Walk through diffs, mapping to document positions
-      // `pos` tracks where we are inside newText (which is in the document at from..to)
       let pos = from;
+      let lastVisualPos = from; // Track last INSERT/DELETE position for button placement
 
       for (const [op, text] of diffs) {
         if (op === 0) {
-          // EQUAL — skip forward in document
           pos += text.length;
         } else if (op === -1) {
-          // DELETE — show as strikethrough widget at current position
           if (text.length > 0 && pos >= 0 && pos <= docLen) {
-            builder.add(pos, pos, Decoration.widget({
-              widget: new DeletedTextWidget(text),
-              side: -1,
-            }));
+            decos.push({
+              from: pos, to: pos, sortSide: -1,
+              deco: Decoration.widget({ widget: new DeletedTextWidget(text), side: -1 }),
+            });
+            lastVisualPos = pos;
           }
-          // Don't advance pos — deleted text isn't in the document
         } else if (op === 1) {
-          // INSERT — mark the inserted text in the document
           const end = pos + text.length;
           if (text.length > 0 && pos >= 0 && end <= docLen) {
-            builder.add(pos, end, Decoration.mark({
-              class: "cc-inserted-inline",
-            }));
+            decos.push({
+              from: pos, to: end, sortSide: 0,
+              deco: Decoration.mark({ class: "cc-inserted-inline" }),
+            });
+            lastVisualPos = end;
           }
           pos = end;
         }
       }
 
-      // Accept/reject buttons at end of change
-      const endPos = Math.min(to, docLen);
-      builder.add(endPos, endPos, Decoration.widget({
-        widget: new ChangeHoverWidget(id),
-        side: 1,
-      }));
+      // Place buttons right after the last visual change, not at end of full range
+      const btnPos = Math.min(lastVisualPos, docLen);
+      decos.push({
+        from: btnPos, to: btnPos, sortSide: 1,
+        deco: Decoration.widget({ widget: new ChangeHoverWidget(id), side: 1 }),
+      });
     }
 
+    // Sort by from position, then by to (widgets have from===to), then by side
+    decos.sort((a, b) => a.from - b.from || a.to - b.to || a.sortSide - b.sortSide);
+
+    const builder = new RangeSetBuilder<Decoration>();
+    for (const d of decos) {
+      builder.add(d.from, d.to, d.deco);
+    }
     return builder.finish();
   },
 

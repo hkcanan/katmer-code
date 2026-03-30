@@ -129,6 +129,8 @@ export class ClaudeChatView extends ItemView {
   private _renderedThinkingCount: number = 0;
   // Track which Edit tools already triggered showEditInEditor
   private editDiffShown: Set<string> = new Set();
+  /** True when session is live (receiving new events), false during resume re-render */
+  private _isLiveSession: boolean = true;
   private _lastAssistantMsgId: string = "";
   private firstMessageText: string = "";
   private turnCount: number = 0;
@@ -1069,7 +1071,8 @@ export class ClaudeChatView extends ItemView {
     this.chatContainer.empty();
     if (this.emptyState) this.emptyState.addClass("is-hidden");
 
-    // Restore saved messages
+    // Restore saved messages — suppress inline diffs during replay
+    this._isLiveSession = false;
     this.messages = savedMessages || [];
     for (const msg of this.messages) {
       if (msg.role === "user") {
@@ -1080,6 +1083,7 @@ export class ClaudeChatView extends ItemView {
       }
       this.turnCount++;
     }
+    this._isLiveSession = true;
 
     this.updateUI();
   }
@@ -1658,6 +1662,9 @@ export class ClaudeChatView extends ItemView {
   private onResponseComplete(): void {
     this.hideLiveProgress();
 
+    // Dismiss any pending permission prompt (e.g. on abort)
+    this._activePermissionCleanup?.();
+
     if (this.pm.state === "error" && !this.currentAssistantMsg) {
       this.showError("Claude CLI exited with an error. Check Obsidian console (Cmd+Opt+I) for details.");
     }
@@ -1740,6 +1747,9 @@ export class ClaudeChatView extends ItemView {
     setTimeout(() => this.sendMessage(), 0);
   }
 
+  /** Active permission prompt cleanup — called on abort to prevent dangling promises */
+  private _activePermissionCleanup: (() => void) | null = null;
+
   /** Inline permission prompt — replaces input area temporarily */
   private showPermissionPrompt(info: {
     toolName: string;
@@ -1785,10 +1795,17 @@ export class ClaudeChatView extends ItemView {
       const allowBtn = btns.createEl("button", { cls: "cc-permission-btn cc-permission-btn-allow", text: "Allow" });
       const alwaysBtn = btns.createEl("button", { cls: "cc-permission-btn cc-permission-btn-always", text: "Always allow" });
 
+      let resolved = false;
       const cleanup = (result: "allow" | "deny" | "always") => {
+        if (resolved) return;
+        resolved = true;
+        this._activePermissionCleanup = null;
         overlay.remove();
         resolve(result);
       };
+
+      // Register cleanup so abort() can dismiss the prompt
+      this._activePermissionCleanup = () => cleanup("deny");
 
       denyBtn.addEventListener("click", () => cleanup("deny"));
       allowBtn.addEventListener("click", () => cleanup("allow"));
@@ -2086,8 +2103,8 @@ export class ClaudeChatView extends ItemView {
     header.createSpan({ text: fileName, cls: "claude-native-diff-title" });
     const statusSpan = header.createSpan({ cls: "claude-native-diff-status is-accepted", text: "Applied" });
 
-    // Only trigger showEditInEditor ONCE per edit
-    if (!this.editDiffShown.has(tc.id)) {
+    // Only trigger showEditInEditor for LIVE edits (not resumed/re-rendered ones)
+    if (!this.editDiffShown.has(tc.id) && this._isLiveSession) {
       this.editDiffShown.add(tc.id);
       void this.showEditInEditor(filePath, oldStr, newStr, tc.id, panel, statusSpan);
     }
@@ -2188,23 +2205,29 @@ export class ClaudeChatView extends ItemView {
           clearInterval(pollInterval);
           return;
         }
-        const changes = cmView.state.field(changeRegistry);
-        const thisChange = changes.find(c => c.id === changeId);
-        if (!thisChange) {
+        // Guard: editor may have been closed/reopened — field might not exist
+        try {
+          const changes = cmView.state.field(changeRegistry);
+          const thisChange = changes.find(c => c.id === changeId);
+          if (!thisChange) {
+            clearInterval(pollInterval);
+            return;
+          }
+          if (thisChange.status === "accepted") {
+            statusSpan.textContent = "Accepted";
+            statusSpan.className = "claude-native-diff-status is-accepted";
+            clearInterval(pollInterval);
+          } else if (thisChange.status === "rejected") {
+            statusSpan.textContent = "Undone";
+            statusSpan.className = "claude-native-diff-status is-rejected";
+            chatPanel.addClass("is-rejected");
+            clearInterval(pollInterval);
+          }
+          this.updateDiffSummary(cmView, statusSpan);
+        } catch {
+          // Editor closed or extension not present — stop polling
           clearInterval(pollInterval);
-          return;
         }
-        if (thisChange.status === "accepted") {
-          statusSpan.textContent = "Accepted";
-          statusSpan.className = "claude-native-diff-status is-accepted";
-          clearInterval(pollInterval);
-        } else if (thisChange.status === "rejected") {
-          statusSpan.textContent = "Undone";
-          statusSpan.className = "claude-native-diff-status is-rejected";
-          chatPanel.addClass("is-rejected");
-          clearInterval(pollInterval);
-        }
-        this.updateDiffSummary(cmView, statusSpan);
       }, 500);
     };
     setTimeout(() => tryShowDiff(0), 400);

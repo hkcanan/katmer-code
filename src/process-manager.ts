@@ -337,29 +337,47 @@ export class ProcessManager {
       thinking: { type: "adaptive" },
       spawnClaudeCodeProcess: this.createCustomSpawn(),
       canUseTool: this.onPermissionRequest ? async (toolName, input, opts) => {
-        const result = await this.onPermissionRequest!({
-          toolName,
-          input,
-          title: opts.title,
-          displayName: opts.displayName,
-          description: opts.description,
-        });
-        if (result === "allow" || result === "always") {
-          return {
-            behavior: "allow",
-            updatedPermissions: result === "always" ? opts.suggestions : undefined,
-          };
+        // Auto-allow all MCP tools — no permission prompt needed
+        if (toolName.startsWith("mcp__")) {
+          return { behavior: "allow" as const, updatedInput: input };
         }
-        return { behavior: "deny", message: "User denied" };
+
+        // Race the permission prompt against the SDK's abort signal
+        const signal = opts.signal;
+        try {
+          const result = await new Promise<"allow" | "deny" | "always">((resolve, reject) => {
+            if (signal?.aborted) { reject(new Error("Aborted")); return; }
+            const onAbort = () => reject(new Error("Aborted"));
+            signal?.addEventListener("abort", onAbort, { once: true });
+            this.onPermissionRequest!({
+              toolName,
+              input,
+              title: opts.title,
+              displayName: opts.displayName,
+              description: opts.description,
+            }).then(resolve, reject).finally(() => {
+              signal?.removeEventListener("abort", onAbort);
+            });
+          });
+          if (result === "allow" || result === "always") {
+            return {
+              behavior: "allow" as const,
+              updatedInput: input,
+              updatedPermissions: result === "always" ? opts.suggestions : undefined,
+            };
+          }
+          return { behavior: "deny" as const, message: "User denied" };
+        } catch {
+          return { behavior: "deny" as const, message: "Aborted" };
+        }
       } : undefined,
     };
 
-    // Always-allowed tools (including all MCP tools)
+    // Always-allowed tools (MCP tools handled in canUseTool above)
     const allowed = [
       "Read", "Write", "Edit", "Glob", "Grep", "Agent",
       "Bash(cat*)", "Bash(ls*)", "Bash(head*)", "Bash(tail*)", "Bash(wc*)",
       "Bash(find*)", "Bash(grep*)", "Bash(echo*)", "Bash(mkdir*)", "Bash(cd*)",
-      "mcp__arguman__*", "mcp__zettelkasten__*", "mcp__supabase__*",
     ];
     if (this.settings.allowWebRequests) {
       allowed.push("WebFetch", "WebSearch", "Bash(curl*)", "Bash(python3*)", "Bash(open *)");
@@ -476,8 +494,8 @@ export class ProcessManager {
             usage: {
               input_tokens: aMsg.message?.usage?.input_tokens || 0,
               output_tokens: aMsg.message?.usage?.output_tokens || 0,
-              cache_read_input_tokens: (aMsg.message?.usage as Record<string, number>)?.cache_read_input_tokens || 0,
-              cache_creation_input_tokens: (aMsg.message?.usage as Record<string, number>)?.cache_creation_input_tokens || 0,
+              cache_read_input_tokens: aMsg.message?.usage?.cache_read_input_tokens || 0,
+              cache_creation_input_tokens: aMsg.message?.usage?.cache_creation_input_tokens || 0,
             },
           },
           session_id: aMsg.session_id,
@@ -533,7 +551,7 @@ export class ProcessManager {
 
       case "stream_event": {
         // Partial streaming — extract text delta for live rendering
-        const streamMsg = msg as { type: "stream_event"; event: Record<string, unknown>; parent_tool_use_id: string | null };
+        const streamMsg = msg as unknown as { type: "stream_event"; event: Record<string, unknown>; parent_tool_use_id: string | null };
 
         // Subagent text streams are skipped (chat-view handles subagent tool calls via assistant events)
         if (streamMsg.parent_tool_use_id) break;
