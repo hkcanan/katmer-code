@@ -331,7 +331,7 @@ export class ProcessManager {
       effort: this.effort || "high",
       permissionMode: permMode,
       pathToClaudeCodeExecutable: cliPath || undefined,
-      settingSources: ["user", "project"],
+      settingSources: ["user", "project", "local"],
       includePartialMessages: true,
       enableFileCheckpointing: true,
       thinking: { type: "adaptive" },
