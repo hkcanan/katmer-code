@@ -14,14 +14,12 @@ export class ClaudeNativeSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    new Setting(containerEl).setName("Claude Code").setHeading();
-
     new Setting(containerEl)
       .setName("CLI path")
-      .setDesc("Path to the Claude Code CLI executable")
+      .setDesc("Path to the claude code CLI executable.")
       .addText((text) =>
         text
-          .setPlaceholder("claude")
+          .setPlaceholder("/usr/local/bin/claude")
           .setValue(this.plugin.settings.cliPath)
           .onChange((value) => {
             this.plugin.settings.cliPath = value;
@@ -31,7 +29,7 @@ export class ClaudeNativeSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Working directory")
-      .setDesc("Default working directory for Claude sessions (empty = vault root)")
+      .setDesc("Default working directory for sessions (empty = vault root).")
       .addText((text) =>
         text
           .setPlaceholder("/path/to/project")
@@ -44,7 +42,7 @@ export class ClaudeNativeSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Default model")
-      .setDesc("Model used for new sessions")
+      .setDesc("Model used for new sessions.")
       .addDropdown((dropdown) =>
         dropdown
           .addOptions({
@@ -62,7 +60,7 @@ export class ClaudeNativeSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Permission mode")
-      .setDesc("How Claude handles tool approvals. 'Accept edits' auto-approves file changes only.")
+      .setDesc("How tool approvals are handled. 'accept edits' auto-approves file changes only.")
       .addDropdown((dropdown) =>
         dropdown
           .addOptions({
@@ -79,7 +77,7 @@ export class ClaudeNativeSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Allow web requests")
-      .setDesc("Auto-approve WebFetch, WebSearch, curl, python3, and open commands. Required for academic skills (/lit-search, /cite-verify, etc.)")
+      .setDesc("Auto-approve WebFetch, WebSearch, curl, python3, and open commands. Required for academic skills (/lit-search, /cite-verify, etc.).")
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.allowWebRequests).onChange((value) => {
           this.plugin.settings.allowWebRequests = value;
@@ -89,7 +87,7 @@ export class ClaudeNativeSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Show tool calls")
-      .setDesc("Display tool call panels (Read, Edit, Bash, etc.)")
+      .setDesc("Display tool call panels in the chat.")
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.showToolCalls).onChange((value) => {
           this.plugin.settings.showToolCalls = value;
@@ -111,7 +109,7 @@ export class ClaudeNativeSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName("Academic skills").setHeading();
     containerEl.createEl("p", {
       text: "Enable skills to add slash commands. Enabled skills are installed to ~/.claude/commands/ and available in all sessions.",
-      cls: "setting-item-description",
+      cls: "setting-item-description katmer-skills-desc",
     });
 
     // Bulk actions
@@ -164,7 +162,7 @@ export class ClaudeNativeSettingTab extends PluginSettingTab {
                 }
                 // Warn if web access not enabled (most skills need it)
                 if (!this.plugin.settings.allowWebRequests && skill.id !== "abstract" && skill.id !== "report-template") {
-                  new Notice("This skill uses web APIs (CrossRef, Semantic Scholar, etc.). Enable \"Allow web requests\" above for it to work.", 8000);
+                  new Notice("This skill uses web APIs. Enable \"allow web requests\" above for it to work.", 8000);
                 }
               } else {
                 this.plugin.settings.enabledSkills =

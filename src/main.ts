@@ -63,8 +63,8 @@ export default class ClaudeNativePlugin extends Plugin {
     this.registerView(VIEW_TYPE_CLAUDE, (leaf) => {
       const view = new ClaudeChatView(leaf, this.settings);
       // Wire up session saving
-      view.onSaveSession = (session) => void this.saveSession(session);
-      view.onShowSessionPicker = () => void this.showSessionPicker();
+      view.onSaveSession = (session) => { void this.saveSession(session); };
+      view.onShowSessionPicker = () => { void this.showSessionPicker(); };
       return view;
     });
 
@@ -76,13 +76,13 @@ export default class ClaudeNativePlugin extends Plugin {
     // Commands
     this.addCommand({
       id: "open-claude-chat",
-      name: "Open Claude Code chat",
+      name: "Open chat",
       callback: () => void this.activateView(),
     });
 
     this.addCommand({
       id: "new-claude-session",
-      name: "New Claude Code session",
+      name: "New session",
       callback: () => {
         void this.activateView().then(() => {
           this.getChatView()?.startNewSession();
@@ -92,7 +92,7 @@ export default class ClaudeNativePlugin extends Plugin {
 
     this.addCommand({
       id: "resume-claude-session",
-      name: "Resume Claude Code session",
+      name: "Resume session",
       callback: () => void this.showSessionPicker(),
     });
 

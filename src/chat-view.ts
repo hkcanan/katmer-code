@@ -169,7 +169,7 @@ export class ClaudeChatView extends ItemView {
   getDisplayText(): string { return "KatmerCode"; }
   getIcon(): string { return "cat"; }
 
-  onOpen(): Promise<void> {
+  async onOpen(): Promise<void> {
     const container = this.containerEl.children[1] as HTMLElement;
     container.empty();
     container.addClass("claude-native-root");
@@ -254,7 +254,7 @@ export class ClaudeChatView extends ItemView {
 
       this.diffBar.createDiv("cc-diffbar-spacer");
 
-      const acceptBtn = this.diffBar.createEl("button", { cls: "cc-diffbar-btn cc-diffbar-accept", text: "✓ Accept" });
+      const acceptBtn = this.diffBar.createEl("button", { cls: "cc-diffbar-btn cc-diffbar-accept", text: "✓ accept" });
       acceptBtn.addEventListener("click", () => {
         const cmView = this.getEditorForFile(this.diffBarFilePath);
         if (cmView) {
@@ -269,7 +269,7 @@ export class ClaudeChatView extends ItemView {
         }
       });
 
-      const rejectBtn = this.diffBar.createEl("button", { cls: "cc-diffbar-btn cc-diffbar-reject", text: "✕ Undo" });
+      const rejectBtn = this.diffBar.createEl("button", { cls: "cc-diffbar-btn cc-diffbar-reject", text: "✕ undo" });
       rejectBtn.addEventListener("click", () => {
         const cmView = this.getEditorForFile(this.diffBarFilePath);
         if (cmView) {
@@ -283,7 +283,7 @@ export class ClaudeChatView extends ItemView {
         }
       });
 
-      const acceptAllBtn = this.diffBar.createEl("button", { cls: "cc-diffbar-btn cc-diffbar-accept-all", text: "✓ All" });
+      const acceptAllBtn = this.diffBar.createEl("button", { cls: "cc-diffbar-btn cc-diffbar-accept-all", text: "✓ all" });
       acceptAllBtn.addEventListener("click", () => {
         const cmView = this.getEditorForFile(this.diffBarFilePath);
         if (cmView) { acceptAllChanges(cmView); this.refreshDiffBar(); }
@@ -537,8 +537,7 @@ export class ClaudeChatView extends ItemView {
     });
 
     // Check CLI availability + pre-warm query
-    void this.checkCli().then(() => this.preWarmQuery()).catch(() => { /* CLI check failed — handled in checkCli */ });
-    return Promise.resolve();
+    void this.checkCli().then(() => this.preWarmQuery());
   }
 
   /** Start SDK query early so first message is instant */
@@ -578,12 +577,16 @@ export class ClaudeChatView extends ItemView {
         this.emptyState.empty();
         this.emptyState.createDiv({ cls: "claude-native-empty-title", text: "Claude Code CLI not found" });
         const setup = this.emptyState.createDiv("claude-native-empty-setup");
-        setup.createEl("p").createEl("strong", { text: "Step 1: install Claude Code" });
-        setup.createEl("pre", { text: "npm install -g @anthropic-ai/claude-code" });
-        setup.createEl("p").createEl("strong", { text: "Step 2: log in (run once in terminal)" });
-        setup.createEl("pre", { text: "claude" });
-        setup.createEl("p").createEl("strong", { text: "Step 3: reload this plugin" });
-        setup.createEl("p", { cls: "claude-native-empty-hint", text: "If Claude is installed but not found, set the full path in plugin settings." });
+        setup.createEl("p").createEl("strong", { text: "Install the CLI" });
+        const installCmd = "npm install -g @anthropic-ai/claude-code";
+        const installPre = setup.createEl("pre");
+        installPre.textContent = installCmd;
+        setup.createEl("p").createEl("strong", { text: "Log in (run once in terminal)" });
+        const loginCmd = "claude";
+        const loginPre = setup.createEl("pre");
+        loginPre.textContent = loginCmd;
+        setup.createEl("p").createEl("strong", { text: "Reload this plugin" });
+        setup.createEl("p", { cls: "claude-native-empty-hint", text: "If the CLI is installed but not found, set the full path in plugin settings" });
       }
       if (this.statusBar) {
         this.statusBar.textContent = "CLI not found";
@@ -892,12 +895,11 @@ export class ClaudeChatView extends ItemView {
     });
   }
 
-  onClose(): Promise<void> {
+  async onClose(): Promise<void> {
     // Destroy ALL tab PMs
     for (const tab of this.tabs) {
       tab.pm.destroy();
     }
-    return Promise.resolve();
   }
 
   updateSettings(settings: ClaudeNativeSettings): void {
@@ -2019,7 +2021,7 @@ export class ClaudeChatView extends ItemView {
     const statusBadge = header.createSpan("cc-tool-status");
     if (isRunning) {
       statusBadge.addClass("is-running");
-      statusBadge.textContent = "running";
+      statusBadge.textContent = "Running";
       // Elapsed timer for long-running tools (Agent, Bash)
       if (tc.startTime && (isAgent || tc.name === "Bash")) {
         const timerSpan = header.createSpan("cc-tool-timer");

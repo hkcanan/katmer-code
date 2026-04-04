@@ -460,9 +460,9 @@ export class ProcessManager {
   private handleSDKMessage(msg: SDKMessage): void {
     switch (msg.type) {
       case "system": {
-        const sysMsg = msg as SDKSystemMessage | SDKCompactBoundaryMessage;
-        if ("subtype" in sysMsg && sysMsg.subtype === "init") {
-          const initMsg = sysMsg as SDKSystemMessage;
+        // msg is narrowed to SDKSystemMessage | SDKCompactBoundaryMessage by switch
+        if ("subtype" in msg && msg.subtype === "init") {
+          const initMsg = msg as SDKSystemMessage;
           this._sessionId = initMsg.session_id;
           const event: SystemInitEvent = {
             type: "system",
@@ -475,14 +475,14 @@ export class ProcessManager {
           };
           this.onEvent?.(event);
         }
-        if ("subtype" in sysMsg && sysMsg.subtype === "compact_boundary") {
-          this.onEvent?.({ type: "system", subtype: "compact_boundary", ...(sysMsg as SDKCompactBoundaryMessage).compact_metadata });
+        if ("subtype" in msg && msg.subtype === "compact_boundary") {
+          this.onEvent?.({ type: "system", subtype: "compact_boundary", ...(msg as SDKCompactBoundaryMessage).compact_metadata });
         }
         break;
       }
 
       case "assistant": {
-        const aMsg = msg as SDKAssistantMessage;
+        const aMsg = msg;
         const event: AssistantMessageEvent = {
           type: "assistant",
           message: {
@@ -506,7 +506,7 @@ export class ProcessManager {
       }
 
       case "result": {
-        const rMsg = msg as SDKResultSuccess | SDKResultError;
+        const rMsg = msg;
         this._sessionId = rMsg.session_id;
 
         const event: ResultEvent = {
@@ -537,7 +537,7 @@ export class ProcessManager {
       }
 
       case "rate_limit_event": {
-        const rlMsg = msg as SDKRateLimitEvent;
+        const rlMsg = msg;
         const event: RateLimitEvent = {
           type: "rate_limit_event",
           rate_limit_info: {
