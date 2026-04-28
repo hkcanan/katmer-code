@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/hkcanan-katmer-code-badge.png)](https://mseep.ai/app/hkcanan-katmer-code)
+
 # KatmerCode
 
 Claude Code inside Obsidian — with academic research skills, inline diff editing, and MCP support.
