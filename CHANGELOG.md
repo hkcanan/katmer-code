@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.1 — Community-plugin compliance
+
+Fixes raised by the Obsidian community plugin automated check:
+
+- **`minAppVersion` bumped from 1.4.0 to 1.8.7.** Plugin uses
+  `Workspace.revealLeaf` (Obsidian 1.7.2+) and `Notice.noticeEl`
+  (1.8.7+); declaring the older minimum was incorrect.
+- `@codemirror/state` and `@codemirror/view` moved into
+  `dependencies` (were used transitively without being declared).
+- Removed unused imports (`rejectAllChanges`, `type InlineChange`)
+  from `chat-view.ts`.
+- Replaced `Element.innerHTML` with `textContent` in CodeMirror
+  hover widgets — no behavioural change, but addresses Obsidian's
+  XSS guidance.
+
+Remaining lint warnings (popout-window compatibility via
+`activeDocument` / `activeWindow.setTimeout`, etc.) don't block the
+plugin check and will be addressed alongside the chat-view module
+split in a future release.
+
 ## 0.5.0 — Multi-provider
 
 Plugin is no longer Claude-only. Pick a provider per tab, run them

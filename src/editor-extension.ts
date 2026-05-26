@@ -118,7 +118,7 @@ class ChangeHoverWidget extends WidgetType {
 
     const accept = document.createElement("button");
     accept.className = "cc-hover-btn cc-hover-accept";
-    accept.innerHTML = "✓";
+    accept.textContent = "✓";
     accept.title = "Accept";
     accept.addEventListener("click", (e) => {
       e.preventDefault(); e.stopPropagation();
@@ -127,7 +127,7 @@ class ChangeHoverWidget extends WidgetType {
 
     const reject = document.createElement("button");
     reject.className = "cc-hover-btn cc-hover-reject";
-    reject.innerHTML = "✕";
+    reject.textContent = "✕";
     reject.title = "Undo";
     reject.addEventListener("click", (e) => {
       e.preventDefault(); e.stopPropagation();

@@ -1,10 +1,9 @@
 import { ItemView, MarkdownRenderer, WorkspaceLeaf, setIcon, TFile, Notice } from "obsidian";
 import { EditorView } from "@codemirror/view";
 import {
-  addChange, acceptChange, acceptAllChanges, rejectAllChanges, rejectSingleChange,
+  addChange, acceptChange, acceptAllChanges, rejectSingleChange,
   goToNextChange, goToPreviousChange, getChangeSummary,
   changeRegistry,
-  type InlineChange,
 } from "./editor-extension";
 import { ProcessManager } from "./process-manager";
 import { createProvider } from "./providers";
