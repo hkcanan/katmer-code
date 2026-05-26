@@ -18,3 +18,13 @@ package-lock.json
 # IDE
 .idea/
 .vscode/
+
+# Antigravity CLI artifact (auto-created on first `agy` run, symlinks into ~/.gemini)
+.antigravitycli/
+
+# Design mockup HTMLs (used during dev, not shipped)
+.design-mockups/
+
+# Captured screenshots from webapp-testing
+/tmp/picker-*.png
+/tmp/full-*.png

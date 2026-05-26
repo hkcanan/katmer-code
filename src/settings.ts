@@ -1,31 +1,162 @@
 import { App, PluginSettingTab, Setting, Notice } from "obsidian";
 import type ClaudeNativePlugin from "./main";
-import { SKILL_CATALOG, CATEGORY_LABELS, type ModelChoice, type PermissionMode } from "./types";
+import {
+  SKILL_CATALOG,
+  CATEGORY_LABELS,
+  PROVIDER_LABELS,
+  PROVIDER_INSTALL_HINTS,
+  type ModelChoice,
+  type PermissionMode,
+  type ProviderId,
+} from "./types";
+import { createProvider } from "./providers";
 
 export class ClaudeNativeSettingTab extends PluginSettingTab {
   plugin: ClaudeNativePlugin;
+
+  /**
+   * CLI detection cache. `detectCli()` spawns `which` and friends — running
+   * it for every provider on every settings re-render makes the Settings
+   * tab visibly stutter when the user opens it. Cache for the lifetime of
+   * the tab instance; reset on path overrides.
+   */
+  private cliProbeCache = new Map<ProviderId, { found: boolean; path?: string; authenticated?: boolean; loginHint?: string }>();
 
   constructor(app: App, plugin: ClaudeNativePlugin) {
     super(app, plugin);
     this.plugin = plugin;
   }
 
+  private probeCli(id: ProviderId): { found: boolean; path?: string; authenticated?: boolean; loginHint?: string } {
+    let cached = this.cliProbeCache.get(id);
+    if (!cached) {
+      cached = createProvider(id, this.plugin.settings).detectCli();
+      this.cliProbeCache.set(id, cached);
+    }
+    return cached;
+  }
+
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
 
+    // ── Provider selection ──
+    new Setting(containerEl).setName("AI provider").setHeading();
+    containerEl.createEl("p", {
+      text: "Choose which backend powers the chat. Each provider needs its own CLI installed and authenticated.",
+      cls: "setting-item-description",
+    });
+
+    const PROVIDERS: ProviderId[] = ["claude", "gemini", "codex", "antigravity"];
+
     new Setting(containerEl)
-      .setName("CLI path")
-      .setDesc("Path to the claude code CLI executable.")
-      .addText((text) =>
-        text
-          .setPlaceholder("/usr/local/bin/claude")
-          .setValue(this.plugin.settings.cliPath)
+      .setName("Default provider")
+      .setDesc("New chat tabs start with this provider; existing tabs switch on save.")
+      .addDropdown((dropdown) => {
+        for (const id of PROVIDERS) {
+          dropdown.addOption(id, PROVIDER_LABELS[id]);
+        }
+        dropdown
+          .setValue(this.plugin.settings.defaultProvider || "claude")
           .onChange((value) => {
-            this.plugin.settings.cliPath = value;
+            this.plugin.settings.defaultProvider = value as ProviderId;
             void this.plugin.saveSettings();
-          })
+            this.display();
+          });
+      });
+
+    // Per-provider CLI path overrides + detection + auth status (cached).
+    for (const id of PROVIDERS) {
+      const cfg = this.plugin.settings.providers?.[id] || { cliPath: "" };
+      const probe = this.probeCli(id);
+      const statusText = !probe.found
+        ? `✗ not found — ${PROVIDER_INSTALL_HINTS[id]}`
+        : probe.authenticated === false
+          ? `⚠ found but not logged in — run: ${probe.loginHint || "<login command>"}`
+          : `✓ ready · ${probe.path}`;
+
+      new Setting(containerEl)
+        .setName(`${PROVIDER_LABELS[id]} CLI path`)
+        .setDesc(statusText)
+        .addText((text) =>
+          text
+            .setPlaceholder("auto-detect")
+            .setValue(cfg.cliPath)
+            .onChange((value) => {
+              if (!this.plugin.settings.providers) {
+                this.plugin.settings.providers = { claude: { cliPath: "" }, gemini: { cliPath: "" }, codex: { cliPath: "" }, antigravity: { cliPath: "" } };
+              }
+              this.plugin.settings.providers[id] = { cliPath: value };
+              // Path override means re-probing is required next time.
+              this.cliProbeCache.delete(id);
+              void this.plugin.saveSettings();
+            })
+        );
+    }
+
+    new Setting(containerEl)
+      .setName("")
+      .addButton((btn) =>
+        btn.setButtonText("Refresh CLI detection").onClick(() => {
+          this.cliProbeCache.clear();
+          this.display();
+        })
       );
+
+    // ── Shared instructions ──────────────────────────────────────
+    new Setting(containerEl).setName("Shared instructions").setHeading();
+    containerEl.createEl("p", {
+      text: "Mirror CLAUDE.md to each provider's instructions file so the same rules reach every model. Both scopes are handled:",
+      cls: "setting-item-description",
+    });
+    const scopeList = containerEl.createEl("ul");
+    scopeList.style.cssText = "font-size:12px;color:var(--text-muted);margin:6px 0 12px 18px;line-height:1.6;";
+    scopeList.createEl("li", { text: "Global: ~/CLAUDE.md → ~/.gemini/GEMINI.md + ~/.codex/AGENTS.md" });
+    scopeList.createEl("li", { text: "Vault: <vault>/CLAUDE.md → <vault>/GEMINI.md + <vault>/AGENTS.md" });
+    containerEl.createEl("p", {
+      text: "Files you wrote by hand are left alone — only files tagged with the KatmerCode header are overwritten.",
+      cls: "setting-item-description",
+    });
+
+    new Setting(containerEl)
+      .setName("Auto-mirror CLAUDE.md to other providers")
+      .setDesc("Copies on startup, watches both global and vault sources for changes, and re-syncs on edit.")
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.mirrorClaudeMd).onChange((value) => {
+          this.plugin.settings.mirrorClaudeMd = value;
+          void this.plugin.saveSettings();
+          if (value) {
+            this.plugin.startClaudeMdMirror();
+            const r = this.plugin.mirrorClaudeMdNow();
+            if (!r.sourceFound) {
+              new Notice("No CLAUDE.md found at ~/CLAUDE.md, ~/.claude/CLAUDE.md, or <vault>/CLAUDE.md.", 6000);
+            } else {
+              const scopeStr = r.scopes.length > 1 ? "global + vault" : r.scopes[0];
+              new Notice(`Mirrored ${scopeStr} CLAUDE.md → ${r.copied} file(s)${r.skipped.length ? ` (${r.skipped.length} skipped, user-owned)` : ""}.`, 5000);
+            }
+          } else {
+            this.plugin.removeClaudeMdMirror();
+            new Notice("Mirror disabled and KatmerCode-owned copies removed.", 4000);
+          }
+          this.display();
+        })
+      );
+
+    if (this.plugin.settings.mirrorClaudeMd) {
+      new Setting(containerEl)
+        .setName("Sync now")
+        .setDesc("Force a one-time re-copy in case a target file changed externally.")
+        .addButton((btn) =>
+          btn.setButtonText("Sync now").onClick(() => {
+            const r = this.plugin.mirrorClaudeMdNow();
+            if (!r.sourceFound) new Notice("No CLAUDE.md source found.", 4000);
+            else {
+              const scopeStr = r.scopes.length > 1 ? "global + vault" : r.scopes[0];
+              new Notice(`Synced ${scopeStr} → ${r.copied} file(s)${r.skipped.length ? `, ${r.skipped.length} skipped.` : "."}`, 4000);
+            }
+          })
+        );
+    }
 
     new Setting(containerEl)
       .setName("Working directory")

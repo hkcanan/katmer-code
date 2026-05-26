@@ -152,7 +152,13 @@ export const changeRegistry = StateField.define<InlineChange[]>({
   update(changes, tr) {
     for (const effect of tr.effects) {
       if (effect.is(addChange)) {
-        changes = [...changes, effect.value];
+        // Dedupe by id — if the same change is dispatched twice (e.g.
+        // a chat re-render after the user already accepted it), keep
+        // the existing entry. Otherwise the accepted diff would come
+        // back as "pending" again in the editor.
+        if (!changes.some(c => c.id === effect.value.id)) {
+          changes = [...changes, effect.value];
+        }
       }
       if (effect.is(acceptChange)) {
         changes = changes.map(c =>

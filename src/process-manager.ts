@@ -1,694 +1,137 @@
-import { spawn, execFileSync } from "child_process";
-import { join } from "path";
-import { existsSync } from "fs";
-import { homedir, userInfo } from "os";
 import type {
   ClaudeEvent,
   ClaudeNativeSettings,
   ModelChoice,
   EffortLevel,
-  AssistantMessageEvent,
-  SystemInitEvent,
-  ResultEvent,
-  RateLimitEvent,
-  StreamDeltaEvent,
 } from "./types";
 
-import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
+import { createProvider } from "./providers";
 import type {
-  SDKMessage,
-  SDKUserMessage,
-  SDKAssistantMessage,
-  SDKSystemMessage,
-  SDKResultSuccess,
-  SDKResultError,
-  SDKRateLimitEvent,
-  SDKCompactBoundaryMessage,
-  Query,
-  Options,
-  SpawnOptions,
-  SpawnedProcess,
-} from "@anthropic-ai/claude-agent-sdk";
+  ProviderAdapter,
+  ProviderId,
+  ProcessState,
+  PermissionPromptInfo,
+  PermissionDecision,
+} from "./providers";
 
-export type ProcessState = "idle" | "running" | "error";
+export type { ProcessState };
 
 /**
- * AsyncIterable message channel for persistent SDK query.
- * Allows pushing user messages that the SDK consumes on demand.
- */
-class UserMessageChannel implements AsyncIterable<SDKUserMessage> {
-  private queue: SDKUserMessage[] = [];
-  private waiting: ((result: IteratorResult<SDKUserMessage>) => void) | null = null;
-  private closed = false;
-
-  enqueue(msg: SDKUserMessage): void {
-    if (this.waiting) {
-      this.waiting({ value: msg, done: false });
-      this.waiting = null;
-    } else {
-      this.queue.push(msg);
-    }
-  }
-
-  close(): void {
-    this.closed = true;
-    if (this.waiting) {
-      this.waiting({ value: undefined!, done: true });
-      this.waiting = null;
-    }
-  }
-
-  [Symbol.asyncIterator](): AsyncIterator<SDKUserMessage> {
-    return {
-      next: (): Promise<IteratorResult<SDKUserMessage>> => {
-        if (this.queue.length > 0) {
-          return Promise.resolve({ value: this.queue.shift()!, done: false });
-        }
-        if (this.closed) {
-          return Promise.resolve({ value: undefined!, done: true });
-        }
-        return new Promise((resolve) => {
-          this.waiting = resolve;
-        });
-      },
-    };
-  }
-}
-
-/**
- * Build an enhanced PATH for GUI apps (Obsidian has a minimal PATH).
- * Includes common Node.js install locations.
- */
-function getEnhancedPath(): string {
-  const home = homedir();
-  const extraPaths = [
-    "/usr/local/bin",
-    "/opt/homebrew/bin",
-    join(home, ".local", "bin"),
-    join(home, ".nvm", "versions", "node", "current", "bin"),
-    "/usr/bin",
-  ];
-
-  // Detect active nvm version
-  const nvmDir = process.env.NVM_DIR || join(home, ".nvm");
-  try {
-    const currentNode = execFileSync("node", ["--version"], {
-      env: { ...process.env, PATH: [process.env.PATH, ...extraPaths].filter(Boolean).join(":") },
-      timeout: 3000,
-    }).toString().trim();
-    if (currentNode) {
-      const nvmBin = join(nvmDir, "versions", "node", currentNode, "bin");
-      if (existsSync(nvmBin)) extraPaths.push(nvmBin);
-    }
-  } catch { /* ignore */ }
-
-  return [process.env.PATH, ...extraPaths].filter(Boolean).join(":");
-}
-
-/**
- * Find the Claude Code CLI executable on the system.
- * Searches common install locations — does NOT bundle cli.js.
- */
-function findClaudeCLIPath(settingsPath?: string): string | null {
-  // 1. User-configured path
-  if (settingsPath && existsSync(settingsPath)) return settingsPath;
-
-  const home = homedir();
-  const enhancedPath = getEnhancedPath();
-
-  // 2. Try `which claude` with enhanced PATH
-  try {
-    const claudePath = execFileSync("which", ["claude"], {
-      env: { ...process.env, PATH: enhancedPath },
-      timeout: 3000,
-    }).toString().trim();
-    if (claudePath && existsSync(claudePath)) return claudePath;
-  } catch { /* not found */ }
-
-  // 3. Common locations
-  const candidates = [
-    join(home, ".claude", "local", "claude"),
-    join(home, ".local", "bin", "claude"),
-    "/usr/local/bin/claude",
-    "/opt/homebrew/bin/claude",
-  ];
-
-  // 4. npm global install — cli.js
-  try {
-    const npmRoot = execFileSync("npm", ["root", "-g"], {
-      env: { ...process.env, PATH: enhancedPath },
-      timeout: 5000,
-    }).toString().trim();
-    if (npmRoot) {
-      candidates.push(join(npmRoot, "@anthropic-ai", "claude-code", "cli.js"));
-    }
-  } catch { /* ignore */ }
-
-  for (const p of candidates) {
-    if (existsSync(p)) return p;
-  }
-
-  return null;
-}
-
-/**
- * Find the node executable with enhanced PATH.
- */
-function findNodeExecutable(): string {
-  const enhancedPath = getEnhancedPath();
-  try {
-    const nodePath = execFileSync("which", ["node"], {
-      env: { ...process.env, PATH: enhancedPath },
-      timeout: 3000,
-    }).toString().trim();
-    if (nodePath) return nodePath;
-  } catch { /* ignore */ }
-  return "node";
-}
-
-/**
- * Manages a persistent Claude Agent SDK query.
+ * ProcessManager — backend-agnostic facade.
  *
- * Uses the SDK's `query()` with AsyncIterable prompt for multi-turn conversations.
- * Events are mapped to our ClaudeEvent type for backward compatibility with chat-view.
+ * Holds a single ProviderAdapter (Claude / Gemini / Codex). Chat-view talks
+ * to this class without caring which backend is active; switching providers
+ * tears down the current adapter and constructs a fresh one.
  */
 export class ProcessManager {
-  private activeQuery: Query | null = null;
-  private channel: UserMessageChannel | null = null;
-  private abortController: AbortController | null = null;
-  private _state: ProcessState = "idle";
   private settings: ClaudeNativeSettings;
-  private _sessionId: string | null = null;
-  private cwd: string = "";
-  private _aborted = false;
-  private cliPath: string | null = null;
-
-  // User-selected options (set from UI before sending)
-  model: ModelChoice = "sonnet";
-  effort: EffortLevel = "high";
+  private adapter: ProviderAdapter;
+  private _providerId: ProviderId;
+  private _model: ModelChoice = "sonnet";
+  private _effort: EffortLevel = "high";
 
   onEvent: ((event: ClaudeEvent) => void) | null = null;
   onStateChange: ((state: ProcessState) => void) | null = null;
   onComplete: (() => void) | null = null;
   onStderr: ((data: string) => void) | null = null;
-  /** Permission prompt callback — returns 'allow' | 'deny' | 'always' */
-  onPermissionRequest: ((info: {
-    toolName: string;
-    input: Record<string, unknown>;
-    title?: string;
-    displayName?: string;
-    description?: string;
-  }) => Promise<"allow" | "deny" | "always">) | null = null;
+  onPermissionRequest:
+    | ((info: PermissionPromptInfo) => Promise<PermissionDecision>)
+    | null = null;
 
-  constructor(settings: ClaudeNativeSettings) {
+  constructor(settings: ClaudeNativeSettings, providerId: ProviderId = "claude") {
     this.settings = settings;
+    this._providerId = providerId;
+    this.adapter = this.buildAdapter(providerId);
   }
 
-  get state(): ProcessState {
-    return this._state;
+  // ── Public accessors that proxy to the active adapter ──
+
+  get providerId(): ProviderId { return this._providerId; }
+  get state(): ProcessState { return this.adapter.state; }
+  get isRunning(): boolean { return this.adapter.isRunning; }
+  get sessionId(): string | null { return this.adapter.sessionId; }
+  get query(): unknown { return this.adapter.query; }
+
+  get model(): ModelChoice { return this._model; }
+  set model(v: ModelChoice) {
+    this._model = v;
+    this.adapter.model = v;
   }
 
-  get isRunning(): boolean {
-    return this._state === "running";
+  get effort(): EffortLevel { return this._effort; }
+  set effort(v: EffortLevel) {
+    this._effort = v;
+    this.adapter.effort = v;
   }
 
-  get sessionId(): string | null {
-    return this._sessionId;
-  }
-
-  /** Expose the active query for supportedCommands() etc. */
-  get query(): Query | null {
-    return this.activeQuery;
-  }
+  // ── Lifecycle ──
 
   updateSettings(settings: ClaudeNativeSettings): void {
     this.settings = settings;
-    // Reset cached CLI path if settings changed
-    this.cliPath = null;
+    this.adapter.updateSettings(settings);
   }
 
-  /** Build environment variables for the SDK subprocess */
-  private buildEnv(): Record<string, string | undefined> {
-    const env: Record<string, string | undefined> = { ...process.env };
-    const home = env.HOME || homedir();
-    env.HOME = home;
-    env.USER = env.USER || userInfo().username;
-    env.PATH = getEnhancedPath();
-    return env;
+  /** Swap providers — tears the current one down and starts fresh. */
+  setProvider(id: ProviderId): void {
+    if (id === this._providerId) return;
+    this.adapter.destroy();
+    this._providerId = id;
+    this.adapter = this.buildAdapter(id);
   }
 
-  /**
-   * Custom spawn function for Electron compatibility.
-   *
-   * CRITICAL: Do NOT pass `signal` to spawn() — Obsidian's Electron uses a
-   * different realm for AbortSignal, causing instanceof checks to fail.
-   *
-   * Return the ChildProcess directly (cast as SpawnedProcess) — it has all
-   * required methods including once() from EventEmitter.
-   */
-  private createCustomSpawn(): (options: SpawnOptions) => SpawnedProcess {
-    return (options: SpawnOptions): SpawnedProcess => {
-      let { command } = options;
-      let spawnArgs = [...options.args];
-      const { cwd, env, signal } = options;
-
-      // Resolve node binary with enhanced PATH (GUI apps have minimal PATH)
-      if (command === "node") {
-        // Check if first arg is a native binary (not a .js file)
-        // Claude CLI can be a Mach-O binary — run it directly, not via node
-        if (spawnArgs.length > 0 && !spawnArgs[0].endsWith(".js") && !spawnArgs[0].endsWith(".mjs")) {
-          command = spawnArgs[0];
-          spawnArgs = spawnArgs.slice(1);
-        } else {
-          command = findNodeExecutable();
-        }
-      }
-
-      const child = spawn(command, spawnArgs, {
-        cwd,
-        env: env as typeof process.env,
-        stdio: ["pipe", "pipe", "pipe"],
-        windowsHide: true,
-        // DO NOT pass signal — Electron's AbortSignal realm mismatch
-      });
-
-      // Manual abort signal handling
-      if (signal) {
-        if (signal.aborted) {
-          child.kill();
-        } else {
-          signal.addEventListener("abort", () => child.kill(), { once: true });
-        }
-      }
-
-      // Forward stderr for error detection
-      if (child.stderr) {
-        child.stderr.on("data", (data: Buffer) => {
-          this.onStderr?.(data.toString("utf-8"));
-        });
-      }
-
-      if (!child.stdin || !child.stdout) {
-        throw new Error("Failed to create process streams");
-      }
-
-      // Cast ChildProcess directly — it satisfies SpawnedProcess interface
-      // (has stdin, stdout, killed, exitCode, kill, on, once from EventEmitter)
-      return child as unknown as SpawnedProcess;
-    };
-  }
-
-  /** Resolve model string and betas for SDK options.
-   * Pass model string as-is — CLI handles [1m] suffix natively for Opus/Sonnet 4.6. */
-  private resolveModel(): { model: string } {
-    const model = this.model || this.settings.defaultModel || "sonnet";
-    return { model };
-  }
-
-  /**
-   * Find and cache the Claude CLI path.
-   */
-  private getCliPath(): string | null {
-    if (!this.cliPath) {
-      this.cliPath = findClaudeCLIPath(this.settings.cliPath);
-    }
-    return this.cliPath;
-  }
-
-  /** Build SDK query options */
-  private buildOptions(): Options {
-    const { model } = this.resolveModel();
-    const permMode = this.settings.permissionMode || "acceptEdits";
-    const cliPath = this.getCliPath();
-
-    this.abortController = new AbortController();
-
-    const options: Options = {
-      abortController: this.abortController,
-      cwd: this.cwd || undefined,
-      env: this.buildEnv(),
-      model,
-      effort: this.effort || "high",
-      permissionMode: permMode,
-      pathToClaudeCodeExecutable: cliPath || undefined,
-      settingSources: ["user", "project", "local"],
-      includePartialMessages: true,
-      enableFileCheckpointing: true,
-      thinking: { type: "adaptive" },
-      spawnClaudeCodeProcess: this.createCustomSpawn(),
-      canUseTool: this.onPermissionRequest ? async (toolName, input, opts) => {
-        // Auto-allow all MCP tools — no permission prompt needed
-        if (toolName.startsWith("mcp__")) {
-          return { behavior: "allow" as const, updatedInput: input };
-        }
-
-        // Race the permission prompt against the SDK's abort signal
-        const signal = opts.signal;
-        try {
-          const result = await new Promise<"allow" | "deny" | "always">((resolve, reject) => {
-            if (signal?.aborted) { reject(new Error("Aborted")); return; }
-            const onAbort = () => reject(new Error("Aborted"));
-            signal?.addEventListener("abort", onAbort, { once: true });
-            this.onPermissionRequest!({
-              toolName,
-              input,
-              title: opts.title,
-              displayName: opts.displayName,
-              description: opts.description,
-            }).then(resolve, reject).finally(() => {
-              signal?.removeEventListener("abort", onAbort);
-            });
-          });
-          if (result === "allow" || result === "always") {
-            return {
-              behavior: "allow" as const,
-              updatedInput: input,
-              updatedPermissions: result === "always" ? opts.suggestions : undefined,
-            };
-          }
-          return { behavior: "deny" as const, message: "User denied" };
-        } catch {
-          return { behavior: "deny" as const, message: "Aborted" };
-        }
-      } : undefined,
-    };
-
-    // Always-allowed tools (MCP tools handled in canUseTool above)
-    const allowed = [
-      "Read", "Write", "Edit", "Glob", "Grep", "Agent",
-      "Bash(cat*)", "Bash(ls*)", "Bash(head*)", "Bash(tail*)", "Bash(wc*)",
-      "Bash(find*)", "Bash(grep*)", "Bash(echo*)", "Bash(mkdir*)", "Bash(cd*)",
-    ];
-    if (this.settings.allowWebRequests) {
-      allowed.push("WebFetch", "WebSearch", "Bash(curl*)", "Bash(python3*)", "Bash(open *)");
-    }
-    options.allowedTools = allowed;
-
-    // Resume existing session
-    if (this._sessionId) {
-      options.resume = this._sessionId;
-    }
-
-    return options;
-  }
-
-  /**
-   * Start a new SDK query with AsyncIterable prompt.
-   * Returns true if successful.
-   */
-  private startQuery(): boolean {
-    // Clean up previous query
-    this.closeQuery();
-
-    // Check CLI availability
-    const cliPath = this.getCliPath();
-    if (!cliPath) {
-      console.error("[katmer-code] Claude CLI not found");
-      this.onStderr?.("Claude Code CLI not found. Install it with: npm install -g @anthropic-ai/claude-code");
-      this.setState("error");
-      this.onComplete?.();
-      return false;
-    }
-
-    try {
-      this.channel = new UserMessageChannel();
-      const options = this.buildOptions();
-
-      this.activeQuery = sdkQuery({
-        prompt: this.channel,
-        options,
-      });
-
-      // Start consuming events in background
-      void this.consumeEvents();
-      return true;
-    } catch (err) {
-      console.error("[katmer-code] SDK query start error:", err);
-      this.setState("error");
-      this.onComplete?.();
-      return false;
-    }
-  }
-
-  /**
-   * Background event consumer — iterates over SDK query output.
-   */
-  private async consumeEvents(): Promise<void> {
-    if (!this.activeQuery) return;
-
-    try {
-      for await (const message of this.activeQuery) {
-        if (this._aborted) break;
-        this.handleSDKMessage(message);
-      }
-    } catch (err: unknown) {
-      if (!this._aborted) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        console.error("[katmer-code] SDK event loop error:", errMsg);
-        if (errMsg.includes("not logged in") || errMsg.includes("authenticate") || errMsg.includes("API key")) {
-          this.onStderr?.("Not logged in. Please run `claude` in your terminal first to authenticate.");
-        }
-        this.setState("error");
-        this.onComplete?.();
-      }
-    }
-  }
-
-  /**
-   * Map SDK message to our ClaudeEvent and forward.
-   */
-  private handleSDKMessage(msg: SDKMessage): void {
-    switch (msg.type) {
-      case "system": {
-        // msg is narrowed to SDKSystemMessage | SDKCompactBoundaryMessage by switch
-        if ("subtype" in msg && msg.subtype === "init") {
-          const initMsg = msg as SDKSystemMessage;
-          this._sessionId = initMsg.session_id;
-          const event: SystemInitEvent = {
-            type: "system",
-            subtype: "init",
-            session_id: initMsg.session_id,
-            model: initMsg.model,
-            tools: initMsg.tools || [],
-            mcp_servers: initMsg.mcp_servers || [],
-            claude_code_version: initMsg.claude_code_version || "",
-          };
-          this.onEvent?.(event);
-        }
-        if ("subtype" in msg && msg.subtype === "compact_boundary") {
-          this.onEvent?.({ type: "system", subtype: "compact_boundary", ...(msg as SDKCompactBoundaryMessage).compact_metadata });
-        }
-        break;
-      }
-
-      case "assistant": {
-        const aMsg = msg;
-        const event: AssistantMessageEvent = {
-          type: "assistant",
-          message: {
-            id: aMsg.message?.id || "",
-            model: aMsg.message?.model || "",
-            role: "assistant",
-            content: (aMsg.message?.content as AssistantMessageEvent["message"]["content"]) || [],
-            stop_reason: aMsg.message?.stop_reason || null,
-            usage: {
-              input_tokens: aMsg.message?.usage?.input_tokens || 0,
-              output_tokens: aMsg.message?.usage?.output_tokens || 0,
-              cache_read_input_tokens: aMsg.message?.usage?.cache_read_input_tokens || 0,
-              cache_creation_input_tokens: aMsg.message?.usage?.cache_creation_input_tokens || 0,
-            },
-          },
-          session_id: aMsg.session_id,
-          parent_tool_use_id: aMsg.parent_tool_use_id,
-        };
-        this.onEvent?.(event);
-        break;
-      }
-
-      case "result": {
-        const rMsg = msg;
-        this._sessionId = rMsg.session_id;
-
-        const event: ResultEvent = {
-          type: "result",
-          subtype: rMsg.subtype === "success" ? "success" : "error",
-          is_error: rMsg.is_error,
-          duration_ms: rMsg.duration_ms,
-          result: "result" in rMsg ? (rMsg as SDKResultSuccess).result : "",
-          total_cost_usd: rMsg.total_cost_usd,
-          session_id: rMsg.session_id,
-          usage: {
-            input_tokens: rMsg.usage?.input_tokens || 0,
-            output_tokens: rMsg.usage?.output_tokens || 0,
-            cache_read_input_tokens: rMsg.usage?.cache_read_input_tokens || 0,
-            cache_creation_input_tokens: rMsg.usage?.cache_creation_input_tokens || 0,
-          },
-        };
-
-        // Attach modelUsage for context window extraction
-        if (rMsg.modelUsage) {
-          Object.assign(event, { modelUsage: rMsg.modelUsage });
-        }
-
-        this.onEvent?.(event);
-        this.setState("idle");
-        this.onComplete?.();
-        break;
-      }
-
-      case "rate_limit_event": {
-        const rlMsg = msg;
-        const event: RateLimitEvent = {
-          type: "rate_limit_event",
-          rate_limit_info: {
-            status: rlMsg.rate_limit_info?.status || "allowed",
-            resetsAt: rlMsg.rate_limit_info?.resetsAt || 0,
-          },
-        };
-        this.onEvent?.(event);
-        break;
-      }
-
-      case "stream_event": {
-        // Partial streaming — extract text delta for live rendering
-        // SDK's stream_event type requires double assertion (BetaRawMessageStreamEvent is not index-compatible)
-        const streamMsg = msg as unknown as { type: "stream_event"; event: Record<string, unknown>; parent_tool_use_id: string | null };
-
-        // Subagent text streams are skipped (chat-view handles subagent tool calls via assistant events)
-        if (streamMsg.parent_tool_use_id) break;
-
-        const ev = streamMsg.event;
-        if (ev && ev.type === "content_block_delta") {
-          const delta = ev.delta as Record<string, unknown> | undefined;
-          if (delta?.type === "text_delta" && typeof delta.text === "string") {
-            const streamEvent: StreamDeltaEvent = {
-              type: "stream_delta",
-              text: delta.text,
-              parent_tool_use_id: streamMsg.parent_tool_use_id,
-            };
-            this.onEvent?.(streamEvent);
-          }
-        }
-        break;
-      }
-
-      default:
-        break;
-    }
-  }
-
-  /**
-   * Pre-warm the query — start CLI subprocess without sending a message.
-   * Makes the first real message instant.
-   */
   warmUp(workingDirectory?: string): void {
-    if (this.activeQuery) return;
-    if (workingDirectory) this.cwd = workingDirectory;
-    // Start query but stay in idle state (not "running")
-    this.startQuery();
-    if (this._state === "running") this.setState("idle");
+    this.adapter.warmUp(workingDirectory);
   }
 
-  /**
-   * Send a message to Claude via the SDK query.
-   */
   send(message: string, workingDirectory?: string): void {
-    if (workingDirectory) {
-      this.cwd = workingDirectory;
-    }
-
-    this._aborted = false;
-    this.setState("running");
-
-    const userMsg: SDKUserMessage = {
-      type: "user",
-      message: {
-        role: "user",
-        content: message,
-      },
-      parent_tool_use_id: null,
-      session_id: this._sessionId || "",
-    };
-
-    if (!this.activeQuery) {
-      const ok = this.startQuery();
-      if (ok) {
-        this.channel?.enqueue(userMsg);
-      }
-    } else {
-      this.channel?.enqueue(userMsg);
-    }
+    this.adapter.send(message, workingDirectory);
   }
 
-  /**
-   * Abort the current in-flight request.
-   */
   abort(): void {
-    this._aborted = true;
-
-    // Kill everything — next send() will create a new query
-    if (this.activeQuery) {
-      void this.activeQuery.interrupt().catch(() => {});
-    }
-    this.abortController?.abort();
-    this.channel?.close();
-    this.channel = null;
-    this.abortController = null;
-    this.activeQuery = null;
-
-    this.setState("idle");
-    this.onComplete?.();
+    this.adapter.abort();
   }
 
-  /**
-   * Reset session — closes query, next message starts fresh.
-   */
   newSession(): void {
-    this.closeQuery();
-    this._sessionId = null;
+    this.adapter.newSession();
   }
 
   setSessionId(id: string): void {
-    this.closeQuery();
-    this._sessionId = id;
+    this.adapter.setSessionId(id);
   }
 
-  /**
-   * Change model at runtime — uses SDK's setModel() if query is active.
-   */
   async setModelRuntime(model: ModelChoice): Promise<void> {
-    this.model = model;
-    if (this.activeQuery) {
-      const { model: modelStr } = this.resolveModel();
-      try {
-        await this.activeQuery.setModel(modelStr);
-      } catch {
-        // Next query will use the new model
-      }
-    }
+    this._model = model;
+    await this.adapter.setModelRuntime(model);
   }
 
-  /** Close current query and channel */
-  private closeQuery(): void {
-    this._aborted = true;
-    this.channel?.close();
-    this.channel = null;
-    this.abortController?.abort();
-    this.abortController = null;
-    this.activeQuery = null;
-    this._aborted = false;
-    this.setState("idle");
-  }
-
-  private setState(state: ProcessState): void {
-    if (this._state !== state) {
-      this._state = state;
-      this.onStateChange?.(state);
-    }
-  }
-
-  /** Clean up on plugin unload */
   destroy(): void {
-    this.closeQuery();
+    this.adapter.destroy();
+  }
+
+  /** Discover slash commands the active session exposes. */
+  getSupportedCommands(): Promise<Array<{ name: string; description?: string }>> {
+    return this.adapter.getSupportedCommands();
+  }
+
+  // ── Internals ──
+
+  private buildAdapter(id: ProviderId): ProviderAdapter {
+    const adapter = createProvider(id, this.settings);
+    adapter.model = this._model;
+    adapter.effort = this._effort;
+    adapter.setCallbacks({
+      onEvent: (e) => this.onEvent?.(e),
+      onStateChange: (s) => this.onStateChange?.(s),
+      onComplete: () => this.onComplete?.(),
+      onStderr: (d) => this.onStderr?.(d),
+      // Always supply the bridge — adapter checks for `undefined` to decide
+      // whether to engage permission flow at all, so we synthesize a denial
+      // when the host plugin hasn't wired one up yet.
+      onPermissionRequest: (info) =>
+        this.onPermissionRequest
+          ? this.onPermissionRequest(info)
+          : Promise.resolve("deny" as const),
+    });
+    return adapter;
   }
 }

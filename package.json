@@ -1,7 +1,7 @@
 {
   "name": "obsidian-claude-native",
-  "version": "0.2.0",
-  "description": "Native Claude Code integration for Obsidian — academic-grade AI assistant",
+  "version": "0.5.0",
+  "description": "Multi-provider AI chat for Obsidian — Claude, Gemini, Codex, Antigravity with per-tab routing",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",

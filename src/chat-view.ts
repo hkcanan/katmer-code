@@ -7,10 +7,11 @@ import {
   type InlineChange,
 } from "./editor-extension";
 import { ProcessManager } from "./process-manager";
+import { createProvider } from "./providers";
 import { execFile } from "child_process";
 import { tmpdir, homedir } from "os";
 import { join } from "path";
-import { writeFileSync } from "fs";
+import { writeFileSync, readFileSync } from "fs";
 import type {
   ClaudeEvent,
   AssistantMessageEvent,
@@ -24,8 +25,9 @@ import type {
   ModelChoice,
   EffortLevel,
   SavedSession,
+  ProviderId,
 } from "./types";
-import { MODEL_LABELS, EFFORT_LABELS, SKILL_CATALOG } from "./types";
+import { MODEL_LABELS, EFFORT_LABELS, SKILL_CATALOG, PROVIDER_LABELS, PROVIDER_LABELS_SHORT, PROVIDER_MODELS, lookupContextWindow } from "./types";
 
 /** Get file path from Electron webUtils or legacy File.path */
 function getFilePathFromFile(f: File): string | undefined {
@@ -84,6 +86,28 @@ export class ClaudeChatView extends ItemView {
   private modelBtns!: Record<ModelChoice, HTMLElement>;
   private effortBtns!: Record<EffortLevel, HTMLElement>;
   private _stopBtn!: HTMLElement;
+  private providerBadge!: HTMLElement;
+  private triggerProviderEl!: HTMLElement;
+  private modelTriggerLabel!: HTMLElement;
+  private modelPopup!: HTMLElement;
+  private providerTabsContainer!: HTMLElement;
+  private modelListContainer!: HTMLElement;
+  private effortContainer!: HTMLElement;
+  /** Track last-used model per provider so switching back restores choice. */
+  private thinkingPlaceholder: HTMLElement | null = null;
+  private modelByProvider: Record<ProviderId, string> = {
+    claude: "sonnet",
+    gemini: "gemini-3.1-pro-preview",
+    codex: "gpt-5.5",
+    antigravity: "gemini-3.5-flash",
+  };
+  /**
+   * CLI detection cache. Calling `detectCli()` spawns `which` and walks
+   * the filesystem — running it for 4 providers on every popup open or
+   * tab switch made the picker feel laggy. Cache once, invalidate when
+   * settings change.
+   */
+  private cliProbeCache = new Map<ProviderId, { found: boolean; path?: string; authenticated?: boolean; loginHint?: string }>();
 
   // Attached context (selected text from editor)
   private attachedContext: { fileName: string; text: string } | null = null;
@@ -110,13 +134,6 @@ export class ClaudeChatView extends ItemView {
   private currentActivity = "";
   private liveProgressEl: HTMLElement | null = null;
 
-  // Pending edit proposals
-  private pendingEdits: Array<{
-    filePath: string;
-    oldString: string;
-    newString: string;
-    banner: HTMLElement | null;
-  }> = [];
 
   // Streaming state — append-only cursor pattern
   private currentStreamingEl: HTMLElement | null = null;
@@ -142,19 +159,48 @@ export class ClaudeChatView extends ItemView {
   constructor(leaf: WorkspaceLeaf, settings: ClaudeNativeSettings) {
     super(leaf);
     this.settings = settings;
-    this.pm = new ProcessManager(settings);
-    this.pm.model = settings.defaultModel || "sonnet";
+    const initialProvider = settings.defaultProvider || "claude";
+    this.pm = new ProcessManager(settings, initialProvider);
+    // settings.defaultModel is a Claude model id; for other providers,
+    // pick that provider's first model instead so the trigger isn't
+    // showing "opus[1m]" when Codex/Gemini is active.
+    this.pm.model = (initialProvider === "claude"
+      ? (settings.defaultModel || "sonnet")
+      : (PROVIDER_MODELS[initialProvider][0]?.id || "")) as ModelChoice;
     this.pm.onEvent = (e) => this.handleEvent(e);
     this.pm.onStateChange = (s) => this.updateUI();
     this.pm.onComplete = () => this.onResponseComplete();
     this.pm.onPermissionRequest = (info) => this.showPermissionPrompt(info);
     this.pm.onStderr = (text) => {
-      // Only show real errors, not CLI warnings
-      const ignore = ["CPU lacks AVX", "warn:", "no stdin data", "Warning:", "deprecat"];
+      const ignore = [
+        "CPU lacks AVX", "warn:", "no stdin data", "Warning:", "deprecat",
+        // Gemini stderr noise
+        "Ripgrep is not available", "Falling back to GrepTool",
+        "Reading prompt from stdin", "Loaded cached credentials",
+        "Reading additional input from stdin",
+        // Codex stderr noise (status lines + transient MCP/auth errors
+        // that don't actually break the turn)
+        "OpenAI Codex", "workdir:", "model:", "provider:", "approval:", "sandbox:",
+        "User instructions:", "tokens used", "[202",
+        "rmcp::", "TokenRefreshFailed", "Transport channel closed",
+        "worker quit with fatal",
+      ];
+      // Surface a friendly 429 / capacity exhaustion message instead of
+      // dumping a full GaxiosError stack into the chat.
+      if (text.includes("MODEL_CAPACITY_EXHAUSTED") || text.includes("No capacity available for model")) {
+        const m = text.match(/No capacity available for model (\S+)/);
+        const modelName = m?.[1] || this.pm.model;
+        this.showError(`${PROVIDER_LABELS[this.pm.providerId]}: model "${modelName}" is at capacity. Try switching to a different model from the picker (e.g. 2.5 Pro or 2.5 Flash) — Google rotates capacity for preview models.`);
+        return;
+      }
+      if (text.includes("RESOURCE_EXHAUSTED") || text.includes("status: 429")) {
+        this.showError(`${PROVIDER_LABELS[this.pm.providerId]}: rate-limited or quota exhausted. Wait a minute and retry, or switch to another model.`);
+        return;
+      }
       if (!ignore.some(w => text.includes(w))) {
-        // Check for auth/login errors
         if (text.includes("not logged in") || text.includes("authenticate") || text.includes("API key") || text.includes("unauthorized")) {
-          this.showError("Not logged in. Please run `claude` in your terminal first to authenticate, then reload this plugin.");
+          const loginCmd = this.pm.providerId === "claude" ? "claude" : this.pm.providerId === "gemini" ? "gemini" : this.pm.providerId === "antigravity" ? "agy" : "codex login";
+          this.showError(`Not logged in. Run \`${loginCmd}\` in your terminal first, then reload this plugin.`);
         } else if (text.includes("Prompt is too long") || text.includes("prompt is too long") || text.includes("context_length_exceeded")) {
           this.showContextFullError();
         } else {
@@ -178,6 +224,15 @@ export class ClaudeChatView extends ItemView {
     const header = container.createDiv("claude-native-header");
     const titleRow = header.createDiv("claude-native-title-row");
     titleRow.createEl("h3", { cls: "claude-native-title", text: "KatmerCode" });
+    // Provider badge is now display-only. Switching happens through the
+    // unified picker in the bottom toolbar so there's a single source of
+    // truth for "which model is this tab using".
+    this.providerBadge = titleRow.createSpan({
+      cls: "cc-provider-badge",
+      text: PROVIDER_LABELS[this.settings.defaultProvider || "claude"],
+    });
+    this.providerBadge.dataset.provider = this.settings.defaultProvider || "claude";
+    this.providerBadge.title = "Current provider for this tab — change it from the picker below";
 
     const controls = titleRow.createDiv("claude-native-controls");
 
@@ -326,9 +381,14 @@ export class ClaudeChatView extends ItemView {
 
     bottomRow.createDiv("cc-spacer");
 
-    // Model selector trigger
+    // Unified provider+model trigger — two stacked lines: provider on top,
+    // model below. Single source of truth for "what's powering this tab".
     const modelTrigger = bottomRow.createDiv("cc-model-trigger");
-    const modelLabel = modelTrigger.createSpan({ cls: "cc-model-text", text: MODEL_LABELS[this.pm.model] });
+    const triggerInner = modelTrigger.createDiv("cc-trigger-inner");
+    const triggerProvider = triggerInner.createDiv({ cls: "cc-trigger-provider" });
+    const triggerModel = triggerInner.createDiv({ cls: "cc-trigger-model", text: "" });
+    this.triggerProviderEl = triggerProvider;
+    this.modelTriggerLabel = triggerModel;
     const modelChevron = modelTrigger.createSpan("cc-chevron");
     setIcon(modelChevron, "chevron-down");
 
@@ -341,59 +401,30 @@ export class ClaudeChatView extends ItemView {
     this.sendBtn = bottomRow.createEl("button", { cls: "cc-send-btn", attr: { "aria-label": "Send" } });
     setIcon(this.sendBtn, "arrow-up");
 
-    // ── Model/effort popup ──
+    // ── Unified popup: provider tabs on top, model list below, effort
+    // at bottom (when supported). Rebuilt on every open so detection and
+    // active states stay fresh.
     const popup = inputArea.createDiv("cc-popup");
     popup.addClass("is-hidden");
-
-    const MODEL_DESCS: Record<string, string> = {
-      "opus[1m]": "Most capable, 1M extended context",
-      opus: "Most capable, 200K context",
-      sonnet: "Balanced for everyday tasks",
-      haiku: "Fastest for quick answers",
-    };
-
-    this.modelBtns = {} as Record<ModelChoice, HTMLElement>;
-    const modelKeys: ModelChoice[] = ["opus[1m]", "opus", "sonnet", "haiku"];
-    for (const key of modelKeys) {
-      const item = popup.createDiv("cc-popup-item" + (key === this.pm.model ? " is-active" : ""));
-      item.createDiv({ cls: "cc-popup-item-name", text: MODEL_LABELS[key] });
-      item.createDiv({ cls: "cc-popup-item-desc", text: MODEL_DESCS[key] });
-      item.addEventListener("click", () => {
-        this.selectModel(key);
-        modelLabel.textContent = MODEL_LABELS[key];
-        popup.querySelectorAll(".cc-popup-item").forEach(el => el.removeClass("is-active"));
-        item.addClass("is-active");
-        popup.addClass("is-hidden");
-      });
-      this.modelBtns[key] = item;
-    }
-
+    this.modelPopup = popup;
+    this.providerTabsContainer = popup.createDiv("cc-popup-provider-tabs");
     popup.createDiv("cc-popup-divider");
-
-    // Effort inside popup
-    const effortSection = popup.createDiv("cc-popup-effort");
-    effortSection.createDiv({ cls: "cc-popup-effort-title", text: "Effort level" });
-    const effortRow = effortSection.createDiv("cc-popup-effort-row");
-
+    this.modelListContainer = popup.createDiv("cc-popup-models");
+    this.modelBtns = {} as Record<ModelChoice, HTMLElement>;
+    this.effortContainer = popup.createDiv("cc-popup-effort-wrap");
     this.effortBtns = {} as Record<EffortLevel, HTMLElement>;
-    const effortKeys: EffortLevel[] = ["low", "medium", "high", "max"];
-    for (const key of effortKeys) {
-      const pill = effortRow.createEl("button", {
-        cls: "cc-pill" + (key === this.pm.effort ? " is-active" : ""),
-        text: EFFORT_LABELS[key],
-      });
-      pill.addEventListener("click", (e) => {
-        e.stopPropagation();
-        this.selectEffort(key);
-        effortRow.querySelectorAll(".cc-pill").forEach(el => el.removeClass("is-active"));
-        pill.addClass("is-active");
-      });
-      this.effortBtns[key] = pill;
-    }
+    this.renderUnifiedPicker();
 
-    // Toggle
+    // Toggle — refresh contents on open. Also invalidate the CLI probe
+    // cache so the user sees fresh auth status (handy after they just
+    // ran a login flow).
     modelTrigger.addEventListener("click", () => {
-      popup.toggleClass("is-hidden", !popup.hasClass("is-hidden"));
+      const wasHidden = popup.hasClass("is-hidden");
+      popup.toggleClass("is-hidden", !wasHidden);
+      if (wasHidden) {
+        this.cliProbeCache.clear();
+        this.renderUnifiedPicker();
+      }
     });
     document.addEventListener("click", (e) => {
       if (!inputArea.contains(e.target as Node)) popup.addClass("is-hidden");
@@ -548,48 +579,46 @@ export class ClaudeChatView extends ItemView {
   }
 
   private async checkCli(): Promise<void> {
-    const cliPath = this.settings.cliPath || "claude";
-
-    // Build same env as ProcessManager
-    const env = { ...process.env };
-    const home = env.HOME || homedir();
-    env.HOME = home;
-    const extraPaths = ["/usr/local/bin", "/opt/homebrew/bin", join(home, ".local", "bin"), "/usr/bin"];
-    env.PATH = [env.PATH, ...extraPaths].filter(Boolean).join(":");
-
-    try {
-      await new Promise<string>((resolve, reject) => {
-        execFile(cliPath, ["--version"], { env, timeout: 5000 }, (err: Error | null, stdout: string) => {
-          if (err) reject(err);
-          else resolve(stdout.trim());
-        });
-      });
-      // CLI found
+    // Ask the active provider whether its CLI is reachable. Cached at the
+    // view level so opening the picker / switching tabs doesn't re-probe.
+    const probe = this.probeCli(this.pm.providerId);
+    if (probe.found) {
       if (this.emptyState) {
         this.emptyState.empty();
         this.emptyState.createDiv({ cls: "claude-native-empty-title", text: "KatmerCode" });
-        this.emptyState.createDiv({ cls: "claude-native-empty-subtitle", text: "Send a message to start" });
+        this.emptyState.createDiv({ cls: "claude-native-empty-subtitle", text: this.emptyStateSubtitle() });
       }
       if (this.statusBar) this.statusBar.textContent = "Ready";
+      return;
+    }
+    // Fall through to the not-found branch below.
+    try {
+      throw new Error("not found");
     } catch {
-      // CLI not found
+      // CLI not found — show provider-specific install hints.
+      const pid = this.pm.providerId;
+      const labels = {
+        claude: { name: "Claude Code CLI", install: "npm install -g @anthropic-ai/claude-code", login: "claude" },
+        gemini: { name: "Gemini CLI", install: "npm install -g @google/gemini-cli", login: "gemini" },
+        codex: { name: "Codex CLI", install: "npm install -g @openai/codex", login: "codex login" },
+        antigravity: { name: "Antigravity CLI", install: "curl -fsSL https://antigravity.google/cli/install.sh | bash", login: "agy" },
+      } as const;
+      const info = labels[pid];
       if (this.emptyState) {
         this.emptyState.empty();
-        this.emptyState.createDiv({ cls: "claude-native-empty-title", text: "Claude Code CLI not found" });
+        this.emptyState.createDiv({ cls: "claude-native-empty-title", text: `${info.name} not found` });
         const setup = this.emptyState.createDiv("claude-native-empty-setup");
         setup.createEl("p").createEl("strong", { text: "Install the CLI" });
-        const installCmd = "npm install -g @anthropic-ai/claude-code";
         const installPre = setup.createEl("pre");
-        installPre.textContent = installCmd;
+        installPre.textContent = info.install;
         setup.createEl("p").createEl("strong", { text: "Log in (run once in terminal)" });
-        const loginCmd = "claude";
         const loginPre = setup.createEl("pre");
-        loginPre.textContent = loginCmd;
+        loginPre.textContent = info.login;
         setup.createEl("p").createEl("strong", { text: "Reload this plugin" });
         setup.createEl("p", { cls: "claude-native-empty-hint", text: "If the CLI is installed but not found, set the full path in plugin settings" });
       }
       if (this.statusBar) {
-        this.statusBar.textContent = "CLI not found";
+        this.statusBar.textContent = `${info.name} not found`;
         this.statusBar.className = "claude-native-status";
       }
     }
@@ -601,9 +630,7 @@ export class ClaudeChatView extends ItemView {
   private async loadSdkCommands(): Promise<void> {
     if (this.sdkCommandsFetched) return;
     try {
-      const q = this.pm.query;
-      if (!q) return;
-      const cmds = await q.supportedCommands();
+      const cmds = await this.pm.getSupportedCommands();
       if (cmds && cmds.length > 0) {
         this.sdkCommands = cmds.map((c: { name: string; description?: string }) => ({
           name: "/" + c.name,
@@ -692,6 +719,10 @@ export class ClaudeChatView extends ItemView {
         item.createSpan({ cls: "cc-skill-badge cc-skill-badge-sdk", text: "CLI" });
       } else if (!cmd.enabled) {
         item.createSpan({ cls: "cc-skill-badge", text: "off" });
+      } else if (this.pm.providerId !== "claude") {
+        // KatmerCode skill running on non-Claude provider — we'll inject
+        // the markdown into the prompt. Label it so the user knows.
+        item.createSpan({ cls: "cc-skill-badge cc-skill-badge-inject", text: "inject" });
       }
       item.addEventListener("click", () => {
         if (cmd.enabled) this.applySkillCompletion(cmd.name);
@@ -904,24 +935,327 @@ export class ClaudeChatView extends ItemView {
 
   updateSettings(settings: ClaudeNativeSettings): void {
     this.settings = settings;
-    // Update ALL tab PMs
+    // Settings change can affect CLI paths — toss the cache.
+    this.cliProbeCache.clear();
+    // Each tab keeps its OWN provider. Settings update is just config
+    // propagation (CLI path overrides, permission mode, etc.).
     for (const tab of this.tabs) {
       tab.pm.updateSettings(settings);
     }
+    this.refreshProviderBadge();
   }
 
   // ── Model & Thinking selectors ──
 
-  private selectModel(model: ModelChoice): void {
-    this.pm.model = model;
-    // Notify SDK of model change at runtime (no restart needed)
-    void this.pm.setModelRuntime(model);
-    // Also update all future tab PMs to use this model
-    for (const tab of this.tabs) {
-      tab.pm.model = model;
+  private selectModel(model: string): void {
+    const fromModel = this.pm.model;
+    if (fromModel === model) return;
+
+    // Active tab only. modelByProvider remembers the choice for new tabs.
+    this.pm.model = model as ModelChoice;
+    this.modelByProvider[this.pm.providerId] = model;
+    void this.pm.setModelRuntime(model as ModelChoice);
+    this.refreshModelTrigger();
+    if (this.modelListContainer) {
+      this.modelListContainer.querySelectorAll(".cc-popup-item").forEach((el) => {
+        el.toggleClass("is-active", (el as HTMLElement).dataset.modelId === model);
+      });
     }
-    for (const [key, btn] of Object.entries(this.modelBtns)) {
-      btn.toggleClass("is-active", key === model);
+    // Same-provider model swap preserves context (the adapter's session
+    // continues); mark it so the user can see when capabilities changed.
+    if (this.messages.length > 0) {
+      this.pushSwitchMarker({
+        kind: "model",
+        fromProvider: this.pm.providerId,
+        fromModel: fromModel as string,
+        toProvider: this.pm.providerId,
+        toModel: model,
+        contextLost: false,
+      });
+    }
+  }
+
+  /** Append a "switched to X" divider message to the chat. */
+  private pushSwitchMarker(meta: NonNullable<ChatMessage["switchMeta"]>): void {
+    const msg: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: "system",
+      content: "",
+      timestamp: Date.now(),
+      switchMeta: meta,
+    };
+    this.messages.push(msg);
+    this.renderSwitchMarker(msg);
+  }
+
+  /** Render the switch divider inline. */
+  private renderSwitchMarker(msg: ChatMessage): void {
+    const meta = msg.switchMeta!;
+    const wrap = this.chatContainer.createDiv("cc-switch-marker");
+    wrap.dataset.kind = meta.kind;
+    wrap.dataset.toProvider = meta.toProvider;
+
+    const fromModels = PROVIDER_MODELS[meta.fromProvider] || [];
+    const toModels = PROVIDER_MODELS[meta.toProvider] || [];
+    const fromLabel = fromModels.find((m) => m.id === meta.fromModel)?.label || meta.fromModel;
+    const toLabel = toModels.find((m) => m.id === meta.toModel)?.label || meta.toModel;
+
+    const line = wrap.createDiv("cc-switch-line");
+    const text = line.createSpan("cc-switch-text");
+    const arrow = " → ";
+    if (meta.kind === "provider") {
+      text.textContent = `Switched to ${PROVIDER_LABELS[meta.toProvider]} · ${toLabel}${arrow}from ${PROVIDER_LABELS[meta.fromProvider]} · ${fromLabel}`;
+    } else {
+      text.textContent = `Switched model · ${fromLabel}${arrow}${toLabel}`;
+    }
+
+    if (meta.contextLost) {
+      const warn = wrap.createDiv("cc-switch-warn");
+      warn.textContent = "⚠ Previous conversation context isn't carried over to the new provider.";
+    }
+    this.scrollToBottom();
+  }
+
+  /**
+   * Build the unified picker popup: provider tabs across the top, model
+   * list in the middle, optional effort selector at the bottom.
+   * Called when the popup opens and when the active tab/provider changes.
+   */
+  private renderUnifiedPicker(): void {
+    this.renderProviderTabs();
+    this.renderModelList();
+    this.renderEffortSection();
+    this.refreshModelTrigger();
+  }
+
+  /** Cached CLI probe — first call spawns, subsequent calls return memoized. */
+  private probeCli(id: ProviderId): { found: boolean; path?: string; authenticated?: boolean; loginHint?: string } {
+    let cached = this.cliProbeCache.get(id);
+    if (!cached) {
+      cached = createProvider(id, this.settings).detectCli();
+      this.cliProbeCache.set(id, cached);
+    }
+    return cached;
+  }
+
+  /** Top section: provider tabs with CLI + auth detection status. */
+  private renderProviderTabs(): void {
+    if (!this.providerTabsContainer) return;
+    this.providerTabsContainer.empty();
+    const activeProvider = this.pm?.providerId || "claude";
+    const providerIds: ProviderId[] = ["claude", "gemini", "codex", "antigravity"];
+    for (const pid of providerIds) {
+      const probe = this.probeCli(pid);
+      const status: "ready" | "no-auth" | "no-cli" =
+        !probe.found ? "no-cli" :
+        probe.authenticated === false ? "no-auth" :
+        "ready";
+
+      const tab = this.providerTabsContainer.createDiv(
+        "cc-provider-tab" +
+        (pid === activeProvider ? " is-active" : "") +
+        (status === "no-cli" ? " is-unavailable" : "") +
+        (status === "no-auth" ? " is-needs-login" : "")
+      );
+      tab.dataset.provider = pid;
+      tab.dataset.status = status;
+      const dot = tab.createSpan({ cls: "cc-provider-tab-dot" });
+      dot.dataset.provider = pid;
+      dot.dataset.status = status;
+      tab.createSpan({ cls: "cc-provider-tab-name", text: PROVIDER_LABELS_SHORT[pid] });
+      if (status === "no-cli") {
+        tab.createSpan({ cls: "cc-provider-tab-warn", text: "install" });
+        tab.title = `${PROVIDER_LABELS[pid]} CLI not found.\n\n${probe.loginHint || ""}`;
+      } else if (status === "no-auth") {
+        tab.createSpan({ cls: "cc-provider-tab-warn cc-provider-tab-warn-auth", text: "login" });
+        tab.title = `${PROVIDER_LABELS[pid]}: not logged in.\n\nRun in your terminal:\n  ${probe.loginHint}`;
+      }
+      tab.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (pid === activeProvider) return;
+        if (status !== "ready") {
+          // Show a copyable Notice with the install/login command.
+          this.showCliSetupNotice(pid, status, probe.loginHint);
+          return;
+        }
+        this.switchProvider(pid);
+        this.renderUnifiedPicker();
+      });
+    }
+  }
+
+  /**
+   * Setup hint. For "no-auth" we try to trigger the provider's own login
+   * flow (Claude/Codex spawn directly, Gemini/Antigravity open Terminal).
+   * For "no-cli" we just give the install command to copy.
+   */
+  private async showCliSetupNotice(pid: ProviderId, status: "no-cli" | "no-auth", hint?: string): Promise<void> {
+    const label = PROVIDER_LABELS[pid];
+
+    if (status === "no-cli") {
+      const message = `Install ${label}:\n\n${hint || ""}\n\n(Click to copy)`;
+      const n = new Notice(message, 9000);
+      if (hint && n.noticeEl) {
+        n.noticeEl.style.cursor = "pointer";
+        n.noticeEl.addEventListener("click", () => {
+          void navigator.clipboard.writeText(hint).then(() => {
+            new Notice("Install command copied — paste into your terminal.", 2500);
+          }).catch(() => {});
+        });
+      }
+      return;
+    }
+
+    // status === "no-auth" → try in-plugin login.
+    const adapter = createProvider(pid, this.settings);
+    if (!adapter.triggerLogin) {
+      // Fallback to copy-paste notice.
+      const n = new Notice(`Log in to ${label}:\n\n${hint || ""}\n\n(Click to copy)`, 9000);
+      if (hint && n.noticeEl) {
+        n.noticeEl.style.cursor = "pointer";
+        n.noticeEl.addEventListener("click", () => {
+          void navigator.clipboard.writeText(hint).then(() => {
+            new Notice("Login command copied.", 2500);
+          });
+        });
+      }
+      return;
+    }
+
+    const progress = new Notice(`Starting ${label} login… browser should open shortly. Plugin polls every 3s for completion.\n\n(Click here to recheck manually)`, 0);
+    if (progress.noticeEl) {
+      progress.noticeEl.style.cursor = "pointer";
+      progress.noticeEl.addEventListener("click", () => {
+        this.cliProbeCache.delete(pid);
+        const fresh = this.probeCli(pid);
+        if (fresh.authenticated === true) {
+          progress.hide();
+          new Notice(`✓ ${label} is now logged in.`, 3500);
+          this.renderUnifiedPicker();
+        } else {
+          new Notice(`Still not detected as logged in — keep the browser flow going.`, 3000);
+        }
+      });
+    }
+    try {
+      const result = await adapter.triggerLogin();
+      progress.hide();
+      if (result.manual) {
+        new Notice(`${label}: terminal opened. Complete login there, then click any provider tab again to retry.`, 8000);
+        // Manual flows can't be auto-detected — invalidate the cache so
+        // the next picker render re-probes.
+        this.cliProbeCache.delete(pid);
+        return;
+      }
+      if (result.success) {
+        this.cliProbeCache.delete(pid);
+        new Notice(`✓ Logged in to ${label}.`, 3500);
+        this.renderUnifiedPicker();
+      } else {
+        new Notice(`${label} login failed: ${result.reason || "unknown error"}`, 6000);
+      }
+    } catch (err) {
+      progress.hide();
+      new Notice(`${label} login error: ${err instanceof Error ? err.message : String(err)}`, 6000);
+    }
+  }
+
+  /** Middle section: model list for the active provider. */
+  private renderModelList(): void {
+    if (!this.modelListContainer) return;
+    this.modelListContainer.empty();
+    this.modelBtns = {} as Record<ModelChoice, HTMLElement>;
+    const provId = this.pm.providerId;
+    const models = PROVIDER_MODELS[provId] || [];
+    const current = this.pm.model || this.modelByProvider[provId] || (models[0]?.id ?? "");
+    if (models.length === 0) {
+      this.modelListContainer.createDiv({
+        cls: "cc-popup-empty",
+        text: "No model selection for this provider.",
+      });
+      return;
+    }
+    for (const m of models) {
+      const item = this.modelListContainer.createDiv("cc-popup-item" + (m.id === current ? " is-active" : ""));
+      item.dataset.modelId = m.id;
+      // Single-line layout — just the model name. Tooltip carries the
+      // longer description so it's still discoverable on hover but
+      // doesn't fight for visual space.
+      item.createDiv({ cls: "cc-popup-item-name", text: m.label });
+      if (m.desc) item.title = m.desc;
+      item.addEventListener("click", () => {
+        this.selectModel(m.id);
+        this.modelPopup?.addClass("is-hidden");
+      });
+      this.modelBtns[m.id as ModelChoice] = item;
+    }
+  }
+
+  /** Bottom section: effort pills — only shown for providers that honor it. */
+  private renderEffortSection(): void {
+    if (!this.effortContainer) return;
+    this.effortContainer.empty();
+    this.effortBtns = {} as Record<EffortLevel, HTMLElement>;
+
+    // Provider support matrix for reasoning effort:
+    //   Claude   — native SDK option (low/medium/high/max)
+    //   Codex    — model_reasoning_effort config (minimal/low/medium/high/xhigh)
+    //   Gemini   — thinking_level exists per Gemini 3.x API but no CLI flag
+    //              exposed yet (github.com/google-gemini/gemini-cli/issues/25122)
+    //   Antigrav — agy v1.0.2 has no reasoning control
+    const supportsEffort = this.pm.providerId === "claude" || this.pm.providerId === "codex";
+    if (!supportsEffort) return;
+
+    this.effortContainer.createDiv("cc-popup-divider");
+    const section = this.effortContainer.createDiv("cc-popup-effort");
+    const titleRow = section.createDiv("cc-popup-effort-title");
+    titleRow.textContent = "Reasoning effort";
+    if (this.pm.providerId === "codex") {
+      const sub = section.createSpan({ cls: "cc-popup-effort-sub" });
+      sub.textContent = "max → high (xhigh only on select models)";
+    }
+    const row = section.createDiv("cc-popup-effort-row");
+    const effortKeys: EffortLevel[] = ["low", "medium", "high", "max"];
+    for (const key of effortKeys) {
+      const pill = row.createEl("button", {
+        cls: "cc-pill" + (key === this.pm.effort ? " is-active" : ""),
+        text: EFFORT_LABELS[key],
+      });
+      pill.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.selectEffort(key);
+        row.querySelectorAll(".cc-pill").forEach(el => el.removeClass("is-active"));
+        pill.addClass("is-active");
+      });
+      this.effortBtns[key] = pill;
+    }
+  }
+
+  /** Update the trigger (provider name + model label) to reflect the active tab. */
+  private refreshModelTrigger(): void {
+    if (!this.modelTriggerLabel) return;
+    const provId = this.pm.providerId;
+    const models = PROVIDER_MODELS[provId] || [];
+    let current: string = this.pm.model || this.modelByProvider[provId];
+    let found = models.find((m) => m.id === current);
+    // Self-heal: if the active model id doesn't belong to the current
+    // provider (e.g. legacy "opus[1m]" stored while Codex is active),
+    // snap to the provider's first model so the trigger never shows a
+    // mismatched label.
+    if (!found && models.length > 0) {
+      const stored = this.modelByProvider[provId];
+      const fallback = (stored && models.some((m) => m.id === stored)) ? stored : models[0].id;
+      this.pm.model = fallback as ModelChoice;
+      this.modelByProvider[provId] = fallback;
+      current = fallback;
+      found = models.find((m) => m.id === current);
+    }
+    this.modelTriggerLabel.textContent = found?.label || current || "—";
+    if (this.triggerProviderEl) {
+      this.triggerProviderEl.textContent = PROVIDER_LABELS[provId] || provId;
+      this.triggerProviderEl.dataset.provider = provId;
+      const trigger = this.triggerProviderEl.closest(".cc-model-trigger") as HTMLElement | null;
+      if (trigger) trigger.dataset.provider = provId;
     }
   }
 
@@ -941,17 +1275,24 @@ export class ClaudeChatView extends ItemView {
     const contextTokens = this.session.inputTokens
       + (this.session.cacheCreationTokens || 0)
       + (this.session.cacheReadTokens || 0);
-    const contextWindow = this.session.contextWindow || 200000;
+    // Prefer the catalog window (per-model truth) over whatever default
+    // was stamped on the session object — Claude's SDK reports the real
+    // window via modelUsage and overrides this, but for Gemini/Codex/Antigrav
+    // we never had it on the session, so the lookup is the source of truth.
+    const catalogWindow = lookupContextWindow(this.pm.providerId, this.pm.model);
+    const contextWindow = Math.max(this.session.contextWindow || 0, catalogWindow);
     const pct = Math.round(Math.min((contextTokens / contextWindow) * 100, 100));
     const warning = pct > 80;
 
-    const fmtK = (n: number) => n >= 1000 ? Math.round(n / 1000) + "K" : String(n);
+    const fmtK = (n: number) => n >= 1_000_000 ? (n / 1_000_000).toFixed(1).replace(/\.0$/, "") + "M" : n >= 1000 ? Math.round(n / 1000) + "K" : String(n);
     this.contextLabel.textContent = `${fmtK(contextTokens)} / ${fmtK(contextWindow)} (${pct}%)`;
     this.contextLabel.toggleClass("cc-warning-text", warning);
 
-    // Tooltip with compact suggestion
+    // Tooltip with compact suggestion (Claude only — other providers
+    // don't have /compact natively).
+    const compactHint = this.pm.providerId === "claude" ? " — run /compact to continue" : " — start a new tab to free room";
     const tooltip = warning
-      ? `${fmtK(contextTokens)} / ${fmtK(contextWindow)} — run /compact to continue`
+      ? `${fmtK(contextTokens)} / ${fmtK(contextWindow)}${compactHint}`
       : `${fmtK(contextTokens)} / ${fmtK(contextWindow)}`;
     this.contextBar.parentElement?.setAttribute("title", tooltip);
   }
@@ -975,13 +1316,14 @@ export class ClaudeChatView extends ItemView {
       return;
     }
 
-    // Slash commands (e.g. /compact, /citation-network) must be sent as-is
-    // — the CLI subprocess handles them internally.
-    // Do NOT wrap with context, or the CLI won't recognize them as commands.
+    // Slash commands: Claude CLI knows them natively via
+    // ~/.claude/commands/. For other providers we inline the skill
+    // markdown ourselves so /peer-review etc. work everywhere.
     const isSlashCommand = text.startsWith("/");
+    const skillInjection = isSlashCommand ? this.maybeInjectSkill(text) : null;
 
     // Build full message with context
-    let fullMessage = text;
+    let fullMessage = skillInjection ?? text;
 
     if (!isSlashCommand) {
       // Attached selection context
@@ -1058,7 +1400,10 @@ export class ClaudeChatView extends ItemView {
     const cwd = this.settings.workingDirectory || vaultPath || undefined;
     this.pm.send(fullMessage, cwd);
 
-    // Show "Thinking..." immediately — don't wait for first event
+    // Visible "is thinking…" at the bottom of the scroll viewport. The
+    // existing live-progress strip lives at the top of the chat and the
+    // user can't see it while reading the latest reply.
+    this.showThinkingPlaceholder();
     this.showLiveProgress("cat", "Thinking…");
     this.scrollToBottom();
   }
@@ -1094,10 +1439,444 @@ export class ClaudeChatView extends ItemView {
 
   // ── PM wiring helpers ──
 
-  /** Create a new ProcessManager for a tab */
+  /**
+   * If the user typed `/skillName ...` on a non-Claude provider, inline the
+   * skill markdown so providers that don't share Claude's commands
+   * directory can still run it. Claude tabs pass through (the CLI knows).
+   * Returns the rewritten prompt, or null when no rewrite is needed.
+   */
+  private maybeInjectSkill(text: string): string | null {
+    if (this.pm.providerId === "claude") return null;
+    const match = text.match(/^\/([a-zA-Z0-9_-]+)\s*([\s\S]*)$/);
+    if (!match) return null;
+    const skillId = match[1];
+    const skillArgs = match[2].trim();
+    if (!this.settings.enabledSkills.includes(skillId)) return null;
+    const content = this.loadSkillMarkdown(skillId);
+    if (!content) return null;
+
+    // Pre-load report-template if the skill (likely) renders an HTML report.
+    let extras = "";
+    if (this.settings.enabledSkills.includes("report-template") && skillId !== "report-template") {
+      const tpl = this.loadSkillMarkdown("report-template");
+      if (tpl) extras = `\n\n## Shared report template\n\n${tpl}`;
+    }
+
+    const argsLine = skillArgs ? `\n\nArguments: ${skillArgs}` : "";
+    return `# Skill: ${skillId}\n\n${content}${extras}${argsLine}`;
+  }
+
+  /** Read a skill's markdown body from ~/.claude/commands/<file>.md. */
+  private loadSkillMarkdown(skillId: string): string | null {
+    const def = SKILL_CATALOG.find((s) => s.id === skillId);
+    if (!def) return null;
+    const path = join(homedir(), ".claude", "commands", def.fileName);
+    try {
+      const raw = readFileSync(path, "utf-8");
+      // Strip the KatmerCode header line so it doesn't end up in the prompt.
+      return raw.replace(/^<!-- KatmerCode skill:.*?-->\s*/, "");
+    } catch {
+      return null;
+    }
+  }
+
+  /** djb2 string hash — collision-resistant for the deduper. */
+  private hashString(s: string): string {
+    let h = 5381;
+    for (let i = 0; i < s.length; i++) {
+      h = ((h << 5) + h) ^ s.charCodeAt(i);
+    }
+    return (h >>> 0).toString(36) + ":" + s.length;
+  }
+
+  /** Empty-state subtitle showing the active provider + model. */
+  private emptyStateSubtitle(): string {
+    const provId = this.pm?.providerId || "claude";
+    const provider = PROVIDER_LABELS[provId] || provId;
+    const models = PROVIDER_MODELS[provId] || [];
+    const current = this.pm?.model || this.modelByProvider[provId];
+    const model = models.find((m) => m.id === current)?.label || current || "";
+    return model ? `${provider} · ${model} — send a message to start` : `${provider} — send a message to start`;
+  }
+
+  /** Refresh the provider badge text to match the ACTIVE tab. */
+  private refreshProviderBadge(): void {
+    if (!this.providerBadge) return;
+    const id = this.pm?.providerId || this.settings.defaultProvider || "claude";
+    this.providerBadge.textContent = PROVIDER_LABELS[id];
+    this.providerBadge.dataset.provider = id;
+  }
+
+  /**
+   * Attach footer actions to a completed assistant message: compact
+   * Copy + "ask another model" icon buttons. They sit on the right of
+   * the duration line and take minimal horizontal space.
+   */
+  private attachMessageActions(footer: HTMLElement, msg: ChatMessage): void {
+    if (!msg.content && !(msg.segments && msg.segments.some((s) => s.type === "text"))) return;
+    const actions = footer.createSpan({ cls: "cc-msg-actions" });
+
+    // Copy button
+    const copyBtn = actions.createEl("button", { cls: "cc-msg-action-btn", attr: { "aria-label": "Copy reply" } });
+    copyBtn.title = "Copy reply";
+    setIcon(copyBtn, "copy");
+    copyBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      void navigator.clipboard.writeText(this.extractAssistantText(msg))
+        .then(() => {
+          setIcon(copyBtn, "check");
+          copyBtn.addClass("is-confirmed");
+          setTimeout(() => {
+            setIcon(copyBtn, "copy");
+            copyBtn.removeClass("is-confirmed");
+          }, 1200);
+        })
+        .catch(() => new Notice("Copy failed.", 2000));
+    });
+
+    // Consult another model — INLINE: doesn't open a new tab. Each item
+    // shows the model that'll be used and lets the user expand a submenu
+    // to pick a different one.
+    const askWrap = actions.createSpan({ cls: "cc-ask-wrap" });
+    const askBtn = askWrap.createEl("button", { cls: "cc-msg-action-btn", attr: { "aria-label": "Consult another model" } });
+    askBtn.title = "Consult another model (in this tab)";
+    setIcon(askBtn, "messages-square");
+    const menu = askWrap.createDiv({ cls: "cc-ask-menu is-hidden" });
+    const providers: ProviderId[] = ["claude", "gemini", "codex", "antigravity"];
+    let hasAnyConsult = false;
+    for (const pid of providers) {
+      if (pid === this.pm.providerId) continue;
+      hasAnyConsult = true;
+
+      const item = menu.createDiv({ cls: "cc-ask-item" });
+      item.dataset.provider = pid;
+      const main = item.createDiv("cc-ask-row");
+      const dot = main.createSpan({ cls: "cc-ask-dot" });
+      dot.dataset.provider = pid;
+      main.createSpan({ cls: "cc-ask-name", text: `Consult ${PROVIDER_LABELS[pid]}` });
+
+      const models = PROVIDER_MODELS[pid] || [];
+      const currentId = this.modelByProvider[pid] || models[0]?.id || "";
+      const currentLabel = models.find((m) => m.id === currentId)?.label || currentId || "—";
+
+      const badge = main.createSpan({ cls: "cc-ask-model-badge" });
+      badge.createSpan({ cls: "cc-ask-model-label", text: currentLabel });
+      const canPick = models.length > 1;
+      if (canPick) {
+        badge.createSpan({ cls: "cc-ask-model-chev", text: "▾" });
+      }
+
+      // Inline submenu — hidden until the model badge chev is clicked.
+      const submenu = item.createDiv("cc-ask-submenu is-hidden");
+      for (const model of models) {
+        const subItem = submenu.createDiv({
+          cls: "cc-ask-sub-item" + (model.id === currentId ? " is-active" : ""),
+        });
+        subItem.createSpan({ cls: "cc-ask-sub-name", text: model.label });
+        if (model.id === currentId) {
+          subItem.createSpan({ cls: "cc-ask-sub-check", text: "✓" });
+        }
+        subItem.addEventListener("click", (e) => {
+          e.stopPropagation();
+          menu.addClass("is-hidden");
+          this.modelByProvider[pid] = model.id;
+          void this.consultProvider(pid, msg, model.id);
+        });
+      }
+
+      main.addEventListener("click", (e) => {
+        e.stopPropagation();
+        // Click on the chev → toggle inline model picker. Click anywhere
+        // else on the row → consult with current default.
+        const target = e.target as HTMLElement;
+        if (canPick && target.closest(".cc-ask-model-badge")) {
+          submenu.toggleClass("is-hidden", !submenu.hasClass("is-hidden"));
+          return;
+        }
+        menu.addClass("is-hidden");
+        void this.consultProvider(pid, msg);
+      });
+    }
+
+    if (hasAnyConsult) {
+      menu.createDiv({ cls: "cc-ask-divider" });
+    }
+    const newTabSub = menu.createDiv({ cls: "cc-ask-item cc-ask-item-sub" });
+    newTabSub.createSpan({ cls: "cc-ask-name", text: "↗ Open in a new tab instead…" });
+    newTabSub.addEventListener("click", (e) => {
+      e.stopPropagation();
+      menu.addClass("is-hidden");
+      this.showForwardChoice(msg);
+    });
+
+    askBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      menu.toggleClass("is-hidden", !menu.hasClass("is-hidden"));
+    });
+    document.addEventListener("click", (e) => {
+      if (!askWrap.contains(e.target as Node)) menu.addClass("is-hidden");
+    });
+  }
+
+  /** Secondary dropdown to pick a provider for "open in new tab" forwarding. */
+  private showForwardChoice(msg: ChatMessage): void {
+    const providers: ProviderId[] = ["claude", "gemini", "codex", "antigravity"];
+    const options = providers
+      .filter((p) => p !== this.pm.providerId)
+      .map((p) => PROVIDER_LABELS[p])
+      .join(", ");
+    const choice = window.prompt(`Open new tab with which provider?\n\nOptions: ${options}`, PROVIDER_LABELS[providers.find((p) => p !== this.pm.providerId)!]);
+    if (!choice) return;
+    const target = providers.find((p) => PROVIDER_LABELS[p].toLowerCase() === choice.trim().toLowerCase());
+    if (target) this.forwardToProvider(target, msg);
+  }
+
+  private extractAssistantText(msg: ChatMessage): string {
+    if (msg.segments && msg.segments.length > 0) {
+      return msg.segments
+        .filter((s): s is { type: "text"; text: string; fromStream?: boolean } => s.type === "text")
+        .map((s) => s.text)
+        .join("\n\n")
+        .trim();
+    }
+    return (msg.content || "").trim();
+  }
+
+  /**
+   * Consult another provider INLINE — no new tab, no context switch.
+   * Spawns a background PM on `target`, sends a focused consultation
+   * prompt, renders the response as a consultation card in the current
+   * conversation, then asks the active provider to synthesize the input.
+   *
+   * Failure modes are isolated: if the consult fails, we surface a
+   * Notice and skip the follow-up so the chat doesn't drift into a
+   * broken state.
+   */
+  private async consultProvider(target: ProviderId, msg: ChatMessage, modelOverride?: string): Promise<void> {
+    if (this.pm.isRunning) {
+      new Notice("Wait for the current reply to finish before consulting another model.", 4000);
+      return;
+    }
+    const replyText = this.extractAssistantText(msg);
+    if (!replyText) {
+      new Notice("Nothing to consult about — the reply is empty.", 3000);
+      return;
+    }
+    const probe = this.probeCli(target);
+    if (!probe.found) {
+      this.showCliSetupNotice(target, "no-cli", probe.loginHint);
+      return;
+    }
+    if (probe.authenticated === false) {
+      this.showCliSetupNotice(target, "no-auth", probe.loginHint);
+      return;
+    }
+    // Resolve the model — explicit override > remembered default > first available.
+    const chosenModelId = modelOverride
+      || this.modelByProvider[target]
+      || PROVIDER_MODELS[target][0]?.id
+      || "";
+    const chosenModelLabel = (PROVIDER_MODELS[target] || []).find((m) => m.id === chosenModelId)?.label || chosenModelId;
+
+    // Build a one-shot prompt for the target provider.
+    const consultPrompt = `I'm working through a conversation with another AI model and I'd like your independent take on its last answer.\n\nLast answer to evaluate:\n\n> ${replyText.split("\n").join("\n> ")}\n\nPlease respond concisely (a few paragraphs max). Focus on: do you agree, what would you add, where do you disagree or see risks, and any concrete improvements. You don't need to repeat the answer — your reviewer voice is what matters.`;
+
+    // Render a placeholder consultation card in the chat.
+    const card = this.chatContainer.createDiv("cc-consultation is-loading");
+    card.dataset.provider = target;
+    const header = card.createDiv("cc-consultation-header");
+    const dot = header.createSpan("cc-consultation-dot");
+    dot.dataset.provider = target;
+    header.createSpan({ cls: "cc-consultation-label", text: `Consulting ${PROVIDER_LABELS[target]}…` });
+    header.createSpan({ cls: "cc-consultation-model", text: chosenModelLabel });
+    const body = card.createDiv("cc-consultation-body");
+    body.textContent = "…";
+    this.scrollToBottom();
+
+    // Spawn a temporary PM and wait for one result.
+    const tmpPm = new ProcessManager(this.settings, target);
+    tmpPm.model = chosenModelId as ModelChoice;
+    tmpPm.effort = this.pm.effort;
+
+    let consultText = "";
+    let consultError: string | null = null;
+
+    const done = new Promise<void>((resolve) => {
+      tmpPm.onEvent = (e) => {
+        if (e.type === "stream_delta") {
+          const delta = (e as StreamDeltaEvent).text;
+          if (delta) consultText += delta;
+          body.textContent = consultText;
+        } else if (e.type === "assistant") {
+          const aMsg = e as AssistantMessageEvent;
+          for (const block of aMsg.message?.content || []) {
+            if (block.type === "text" && block.text) {
+              consultText = block.text;
+              body.textContent = consultText;
+            }
+          }
+        }
+      };
+      tmpPm.onStderr = (text) => {
+        if (text.includes("MODEL_CAPACITY_EXHAUSTED") || text.includes("RESOURCE_EXHAUSTED")) {
+          consultError = `${PROVIDER_LABELS[target]} is at capacity right now. Try a different model.`;
+        } else if (text.includes("not logged in") || text.includes("authenticate")) {
+          consultError = `${PROVIDER_LABELS[target]} is not authenticated. Run its CLI login command in your terminal first.`;
+        }
+      };
+      tmpPm.onComplete = () => {
+        resolve();
+      };
+    });
+
+    const vaultPath = (this.app.vault.adapter as { basePath?: string }).basePath;
+    const cwd = this.settings.workingDirectory || vaultPath || undefined;
+    tmpPm.send(consultPrompt, cwd);
+    await done;
+    tmpPm.destroy();
+
+    // Finalize the consultation card.
+    card.removeClass("is-loading");
+    header.empty();
+    const dot2 = header.createSpan("cc-consultation-dot");
+    dot2.dataset.provider = target;
+    header.createSpan({ cls: "cc-consultation-label", text: `${PROVIDER_LABELS[target]} consulted` });
+    header.createSpan({ cls: "cc-consultation-model", text: chosenModelLabel });
+
+    if (consultError || !consultText.trim()) {
+      card.addClass("is-error");
+      body.empty();
+      body.textContent = consultError || "No response from the consulted model.";
+      return;
+    }
+
+    // Replace plaintext with rendered markdown.
+    body.empty();
+    try {
+      MarkdownRenderer.render(this.app, consultText, body, "", this);
+    } catch {
+      body.textContent = consultText;
+    }
+
+    // Compose the follow-up prompt for the active model. Claude doesn't
+    // see the consultation card (that's UI-only), so the quoted text
+    // must be in the prompt itself.
+    const followup = `[Cross-model synthesis] I just consulted ${PROVIDER_LABELS[target]} about your previous reply. Here is its take:\n\n> ${consultText.split("\n").join("\n> ")}\n\nHow does this change or refine your answer? Briefly: where do you agree, where do you push back, and anything you'd integrate?`;
+
+    // Render a COMPACT synthesis pill — not a full user bubble — so the
+    // chat doesn't read like the user typed a wall of quoted text.
+    const synthMsg: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: "user",
+      content: followup,
+      timestamp: Date.now(),
+      synthesisMeta: {
+        consultedProvider: target,
+        consultedLabel: `${PROVIDER_LABELS[target]} (${chosenModelLabel})`,
+      },
+    };
+    this.messages.push(synthMsg);
+    this.renderUserMessage(synthMsg);
+
+    // Reset streaming state so the next assistant event opens a fresh bubble.
+    this.currentAssistantMsg = null;
+    this.currentStreamingEl = null;
+    this.streamingTextEl = null;
+    this.streamingText = "";
+    this._renderedToolIds.clear();
+    this._renderedTextHashes.clear();
+    this._renderedThinkingCount = 0;
+    this._lastAssistantMsgId = "";
+
+    // Send to the active PM directly — bypass sendMessage so we don't
+    // get the default user-bubble rendering.
+    this.pm.send(followup, cwd);
+    // Visible thinking indicator while the active model digests the
+    // consultation. Disappears when the first reply event arrives.
+    this.showThinkingPlaceholder();
+  }
+
+  /** Open a new tab on `target` with the previous reply seeded as context. */
+  private forwardToProvider(target: ProviderId, msg: ChatMessage): void {
+    const replyText = this.extractAssistantText(msg);
+    const fromLabel = PROVIDER_LABELS[this.pm.providerId] || this.pm.providerId;
+    const prompt = `Another model (${fromLabel}) gave me this answer:\n\n> ${replyText.split("\n").join("\n> ")}\n\nWhat's your take? Anything you'd add, dispute, or do differently?`;
+
+    this.saveActiveTabState();
+    const newPm = new ProcessManager(this.settings, target);
+    newPm.model = (this.modelByProvider[target] || PROVIDER_MODELS[target][0]?.id || "") as ModelChoice;
+    newPm.effort = this.pm.effort;
+    const tab: TabState = {
+      id: crypto.randomUUID(),
+      title: `Second opinion · ${PROVIDER_LABELS[target]}`,
+      messages: [],
+      session: null,
+      sessionId: null,
+      firstMessageText: "",
+      turnCount: 0,
+      pm: newPm,
+      pendingPermissions: [],
+    };
+    this.tabs.push(tab);
+    this.switchToTab(tab.id);
+    this.renderTabBar();
+    if (this.inputEl) {
+      this.inputEl.value = prompt;
+      this.inputEl.focus();
+      this.autoResizeInput();
+    }
+  }
+
+  /**
+   * Switch the ACTIVE tab's provider. Other tabs keep theirs — this is the
+   * point of having tabs at all (Codex in one tab while Claude runs in
+   * another).
+   *
+   * Important: we do NOT touch `settings.defaultProvider` here. The default
+   * only controls what new tabs spawn with; flipping a tab mid-conversation
+   * shouldn't rewrite the global preference. Use Settings to change the
+   * default for new tabs.
+   */
+  private switchProvider(id: ProviderId): void {
+    if (this.pm.providerId === id) return;
+
+    const fromProvider = this.pm.providerId;
+    const fromModel = this.pm.model;
+
+    // Only swap the ACTIVE tab's adapter. Other tabs are independent.
+    const targetModel = this.modelByProvider[id] || PROVIDER_MODELS[id][0]?.id;
+    this.pm.setProvider(id);
+    if (targetModel) this.pm.model = targetModel as ModelChoice;
+
+    // Mark the switch in the conversation so the user can see it. Only
+    // bother once there's actual history — empty tabs don't need a
+    // divider since the first message starts fresh anyway.
+    if (this.messages.length > 0) {
+      this.pushSwitchMarker({
+        kind: "provider",
+        fromProvider,
+        fromModel,
+        toProvider: id,
+        toModel: targetModel || "",
+        contextLost: true,
+      });
+    }
+
+    this.refreshProviderBadge();
+    this.renderUnifiedPicker();
+    void this.checkCli();
+  }
+
+  /**
+   * Create a new ProcessManager for a tab.
+   * Inherits the active tab's provider+model so opening a new tab while
+   * chatting with (say) Codex doesn't reset you to Claude.
+   */
   private createPM(): ProcessManager {
-    const pm = new ProcessManager(this.settings);
-    pm.model = this.pm?.model || this.settings.defaultModel || "sonnet";
+    const inheritProvider = this.pm?.providerId || this.settings.defaultProvider || "claude";
+    const inheritModel = this.pm?.model || this.modelByProvider[inheritProvider] || "sonnet";
+    const pm = new ProcessManager(this.settings, inheritProvider);
+    pm.model = inheritModel as ModelChoice;
     pm.effort = this.pm?.effort || "high";
     return pm;
   }
@@ -1109,10 +1888,23 @@ export class ClaudeChatView extends ItemView {
     pm.onComplete = () => this.onResponseComplete();
     pm.onPermissionRequest = (info) => this.showPermissionPrompt(info);
     pm.onStderr = (text) => {
-      const ignore = ["CPU lacks AVX", "warn:", "no stdin data", "Warning:", "deprecat"];
+      const ignore = [
+        "CPU lacks AVX", "warn:", "no stdin data", "Warning:", "deprecat",
+        // Gemini stderr noise
+        "Ripgrep is not available", "Falling back to GrepTool",
+        "Reading prompt from stdin", "Loaded cached credentials",
+        "Reading additional input from stdin",
+        // Codex stderr noise (status lines and transient MCP/auth errors
+        // that don't actually break the turn)
+        "OpenAI Codex", "workdir:", "model:", "provider:", "approval:", "sandbox:",
+        "User instructions:", "tokens used", "[202",
+        "rmcp::", "TokenRefreshFailed", "Transport channel closed",
+        "worker quit with fatal",
+      ];
       if (!ignore.some(w => text.includes(w))) {
         if (text.includes("not logged in") || text.includes("authenticate") || text.includes("API key") || text.includes("unauthorized")) {
-          this.showError("Not logged in. Please run `claude` in your terminal first to authenticate, then reload this plugin.");
+          const loginCmd = pm.providerId === "claude" ? "claude" : pm.providerId === "gemini" ? "gemini" : pm.providerId === "antigravity" ? "agy" : "codex login";
+          this.showError(`Not logged in. Run \`${loginCmd}\` in your terminal first, then reload this plugin.`);
         } else if (text.includes("Prompt is too long") || text.includes("prompt is too long") || text.includes("context_length_exceeded")) {
           this.showContextFullError();
         } else {
@@ -1177,7 +1969,7 @@ export class ClaudeChatView extends ItemView {
             totalCost: 0,
             inputTokens: 0,
             outputTokens: 0,
-            contextWindow: 200000,
+            contextWindow: lookupContextWindow(tab.pm.providerId, tab.pm.model),
             cacheReadTokens: 0,
             cacheCreationTokens: 0,
           };
@@ -1282,6 +2074,10 @@ export class ClaudeChatView extends ItemView {
     this.pm = tab.pm;
     this.wirePM(this.pm);
 
+    // Reflect the tab's provider + model in the header and model picker.
+    this.refreshProviderBadge();
+    this.renderUnifiedPicker();
+
     // Pre-warm if this PM has no active query yet
     if (!this.pm.query && !tab.sessionId) {
       const vaultPath = (this.app.vault.adapter as { basePath?: string }).basePath;
@@ -1307,10 +2103,18 @@ export class ClaudeChatView extends ItemView {
       this.emptyState.createDiv({ cls: "claude-native-empty-title", text: "KatmerCode" });
       this.emptyState.createDiv({ cls: "claude-native-empty-subtitle", text: "Send a message to start" });
     } else {
+      // CRITICAL: suppress inline-diff replay during tab re-render. Without
+      // this, every Edit tool in the history re-triggers showEditInEditor,
+      // pushing already-accepted diffs back into the open file's editor.
+      // (restoreSession does the same thing — keep both paths in sync.)
+      this._isLiveSession = false;
+      this.editDiffShown.clear();
       for (const msg of this.messages) {
         if (msg.role === "user") this.renderUserMessage(msg);
         else if (msg.role === "assistant") this.renderAssistantMessage(msg);
+        else if (msg.role === "system" && msg.switchMeta) this.renderSwitchMarker(msg);
       }
+      this._isLiveSession = true;
     }
 
     // If the tab's PM is running, show progress indicator
@@ -1382,6 +2186,11 @@ export class ClaudeChatView extends ItemView {
         "cc-tab" + (isActive ? " is-active" : "") + (isRunning ? " is-running" : "")
       );
 
+      // Colored dot indicating which provider this tab is using.
+      const providerDot = tabEl.createSpan({ cls: "cc-tab-provider-dot" });
+      providerDot.dataset.provider = tab.pm?.providerId || "claude";
+      providerDot.title = PROVIDER_LABELS[tab.pm?.providerId || "claude"];
+
       tabEl.createSpan({ cls: "cc-tab-title", text: tab.title });
 
       const closeBtn = tabEl.createSpan({ cls: "cc-tab-close" });
@@ -1446,9 +2255,12 @@ export class ClaudeChatView extends ItemView {
     }
 
     if (event.subtype === "init") {
-      // Fallback context window — will be updated from result event's modelUsage
+      // Seed the context window from the per-model catalog. Claude's
+      // SDK will override this with the true value via modelUsage on the
+      // first result event; other providers don't carry that data so
+      // the catalog stays authoritative.
       const model = event.model || "unknown";
-      const contextWindow = 200000; // conservative default, real value comes from SDK result
+      const contextWindow = lookupContextWindow(this.pm.providerId, this.pm.model);
 
       this.session = {
         sessionId: event.session_id,
@@ -1473,8 +2285,9 @@ export class ClaudeChatView extends ItemView {
    * When the full assistant message arrives, it replaces this streaming text.
    */
   private handleStreamDelta(event: StreamDeltaEvent): void {
+    // First content has arrived — drop the "is thinking" placeholder.
+    this.hideThinkingPlaceholder();
     this.streamingText += event.text;
-    // (streaming text will be replaced by proper markdown when assistant event arrives)
 
     // Ensure we have a streaming container
     if (!this.currentStreamingEl) {
@@ -1482,7 +2295,8 @@ export class ClaudeChatView extends ItemView {
       this.currentStreamingEl = this.chatContainer.createDiv(
         "claude-native-msg claude-native-msg-assistant is-streaming"
       );
-      this.currentStreamingEl.createDiv({ cls: "claude-native-msg-label", text: "Claude" });
+      this.currentStreamingEl.dataset.provider = this.pm.providerId;
+      this.currentStreamingEl.createDiv({ cls: "claude-native-msg-label", text: PROVIDER_LABELS[this.pm.providerId] || "Assistant" });
       this.streamingTextEl = this.currentStreamingEl.createDiv("claude-native-msg-body cc-streaming-body");
     }
 
@@ -1490,12 +2304,44 @@ export class ClaudeChatView extends ItemView {
       this.streamingTextEl = this.currentStreamingEl!.createDiv("claude-native-msg-body cc-streaming-body");
     }
 
+    // CRITICAL: persist streaming text into the chat message so it survives
+    // a tab switch. Without this, providers that only emit stream_delta
+    // events (no final assistant envelope) lose their reply when the user
+    // navigates away and back.
+    if (!this.currentAssistantMsg) {
+      const msg: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: "",
+        toolCalls: [],
+        segments: [],
+        timestamp: Date.now(),
+        isStreaming: true,
+      };
+      this.currentAssistantMsg = msg;
+      this.messages.push(msg);
+    }
+    // Keep the streaming text on the last text segment so re-render after
+    // tab-switch shows the in-progress reply. We mark it so a real
+    // assistant text block (if it ever arrives) replaces this stub
+    // instead of double-rendering.
+    const segs = this.currentAssistantMsg.segments!;
+    const last = segs[segs.length - 1];
+    if (last && last.type === "text" && last.fromStream) {
+      last.text = this.streamingText;
+    } else {
+      segs.push({ type: "text", text: this.streamingText, fromStream: true });
+    }
+    this.currentAssistantMsg.content = this.streamingText;
+
     // Render streaming text (use textContent for speed, markdown on complete)
     this.streamingTextEl.textContent = this.streamingText;
     this.scrollToBottom();
   }
 
   private handleAssistantEvent(event: AssistantMessageEvent): void {
+    // First content has arrived — drop the "is thinking" placeholder.
+    this.hideThinkingPlaceholder();
     // Subagent messages — don't render in chat, but show tool calls in progress indicator
     if (event.parent_tool_use_id) {
       const content = event.message?.content;
@@ -1537,7 +2383,8 @@ export class ClaudeChatView extends ItemView {
       this.currentStreamingEl = this.chatContainer.createDiv(
         "claude-native-msg claude-native-msg-assistant is-streaming"
       );
-      this.currentStreamingEl.createDiv({ cls: "claude-native-msg-label", text: "Claude" });
+      this.currentStreamingEl.dataset.provider = this.pm.providerId;
+      this.currentStreamingEl.createDiv({ cls: "claude-native-msg-label", text: PROVIDER_LABELS[this.pm.providerId] || "Assistant" });
     }
     if (!this.currentAssistantMsg) {
       const msg: ChatMessage = {
@@ -1578,7 +2425,9 @@ export class ClaudeChatView extends ItemView {
         this.renderToolCall(el, tc);
       } else if (block.type === "text" && block.text) {
         // Dedup: exact text match (SDK sends cumulative — same text appears in multiple events)
-        const textHash = block.text.slice(0, 100) + "|" + block.text.length;
+        // Hash that won't false-positive when two different responses
+        // happen to share the same first 100 chars AND length.
+        const textHash = this.hashString(block.text);
         if (this._renderedTextHashes.has(textHash)) continue;
         this._renderedTextHashes.add(textHash);
 
@@ -1589,8 +2438,19 @@ export class ClaudeChatView extends ItemView {
           this.streamingText = "";
         }
 
-        this.currentAssistantMsg.content += block.text;
-        this.currentAssistantMsg.segments!.push({ type: "text", text: block.text });
+        // If the previous segment was a streaming stub, finalize it in place
+        // instead of pushing a duplicate (otherwise the final text gets
+        // rendered twice and msg.content doubles up).
+        const segsArr = this.currentAssistantMsg.segments!;
+        const lastSeg = segsArr[segsArr.length - 1];
+        if (lastSeg && lastSeg.type === "text" && lastSeg.fromStream) {
+          lastSeg.text = block.text;
+          lastSeg.fromStream = false;
+          this.currentAssistantMsg.content = block.text;
+        } else {
+          this.currentAssistantMsg.content += block.text;
+          segsArr.push({ type: "text", text: block.text });
+        }
         const body = el.createDiv("claude-native-msg-body");
         MarkdownRenderer.render(this.app, block.text, body, "", this);
         this.enhanceCodeBlocks(body);
@@ -1664,31 +2524,69 @@ export class ClaudeChatView extends ItemView {
 
   private onResponseComplete(): void {
     this.hideLiveProgress();
+    this.hideThinkingPlaceholder();
 
     // Dismiss any pending permission prompt (e.g. on abort)
     this._activePermissionCleanup?.();
 
     if (this.pm.state === "error" && !this.currentAssistantMsg) {
-      this.showError("Claude CLI exited with an error. Check Obsidian console (Cmd+Opt+I) for details.");
+      const providerName = PROVIDER_LABELS[this.pm.providerId] || this.pm.providerId;
+      this.showError(`${providerName} exited with an error. Check Obsidian console (Cmd+Opt+I) for details.`);
     }
-    // Finalize streaming state
+    // Finalize streaming state — also kill the blinking cursor on the
+    // streaming body so old messages don't keep animating.
     if (this.currentAssistantMsg) {
       this.currentAssistantMsg.isStreaming = false;
+      // Mark any tools still showing "Running" as done — they're stranded
+      // if the turn ended without their result event (e.g. provider 429,
+      // process killed, agent loop aborted).
+      for (const tc of this.currentAssistantMsg.toolCalls || []) {
+        if (!tc.result && tc.name !== "Thinking") {
+          tc.result = "";
+          const toolEl = this.currentStreamingEl?.querySelector(
+            `[data-tool-id="${tc.id}"] .cc-tool-status.is-running`
+          ) as HTMLElement | null;
+          if (toolEl) {
+            toolEl.removeClass("is-running");
+            toolEl.addClass("is-stalled");
+            toolEl.empty();
+            toolEl.textContent = "—";
+          }
+        }
+      }
+    }
+    // If the stream finished without a proper assistant text block (Gemini
+    // sometimes only emits deltas), the streaming element is still showing
+    // raw plaintext. Re-render it as markdown so the user sees the polished
+    // version immediately — not after a tab switch.
+    if (this.streamingTextEl && this.streamingText) {
+      this.streamingTextEl.empty();
+      this.streamingTextEl.removeClass("cc-streaming-body");
+      try {
+        MarkdownRenderer.render(this.app, this.streamingText, this.streamingTextEl, "", this);
+        this.enhanceCodeBlocks(this.streamingTextEl);
+      } catch { /* fallback — leave as-is */ }
+    } else if (this.streamingTextEl) {
+      this.streamingTextEl.removeClass("cc-streaming-body");
     }
     if (this.currentStreamingEl) {
       this.currentStreamingEl.removeClass("is-streaming");
-      // Duration footer with flavor word
+      this.currentStreamingEl.querySelectorAll(".cc-streaming-body").forEach((el) => {
+        el.removeClass("cc-streaming-body");
+      });
+      // Footer row — duration + "Ask another model" forwarding action.
+      const footer = this.currentStreamingEl.createDiv("cc-response-footer");
       if (this.currentAssistantMsg?.timestamp) {
         const elapsed = Math.floor((Date.now() - this.currentAssistantMsg.timestamp) / 1000);
         if (elapsed > 1) {
-          const verbs = ["Cogitated", "Ruminated", "Deliberated", "Pondered", "Synthesized", "Distilled", "Fermented", "Percolated", "Marinated", "Incubated", "Churned", "Concocted"];
-          const verb = verbs[Math.floor(Math.random() * verbs.length)];
-          const footer = this.currentStreamingEl.createDiv("cc-response-footer");
           const min = Math.floor(elapsed / 60);
           const sec = elapsed % 60;
           const timeStr = min > 0 ? `${min}m ${sec}s` : `${sec}s`;
-          footer.textContent = `* ${verb} for ${timeStr}`;
+          footer.createSpan({ cls: "cc-response-time", text: `* Responded in ${timeStr}` });
         }
+      }
+      if (this.currentAssistantMsg) {
+        this.attachMessageActions(footer, this.currentAssistantMsg);
       }
     }
     this.currentAssistantMsg = null;
@@ -1844,6 +2742,14 @@ export class ClaudeChatView extends ItemView {
   // ── Rendering ──
 
   private renderUserMessage(msg: ChatMessage): void {
+    // Compact synthesis pill instead of a full user bubble when this
+    // wasn't actually typed by the user — keeps cross-model consult
+    // flows readable.
+    if (msg.synthesisMeta) {
+      this.renderSynthesisPill(msg);
+      return;
+    }
+
     const wrapper = this.chatContainer.createDiv("claude-native-msg claude-native-msg-user");
     wrapper.createDiv({ cls: "claude-native-msg-label", text: "You" });
 
@@ -1871,12 +2777,70 @@ export class ClaudeChatView extends ItemView {
     MarkdownRenderer.render(this.app, msg.content, body, "", this);
   }
 
+  /**
+   * Show a small "model is thinking" placeholder right after the user's
+   * (or synthesis) message goes out. Disappears as soon as the first
+   * streaming/assistant event arrives.
+   */
+  private showThinkingPlaceholder(): void {
+    this.hideThinkingPlaceholder();
+    const provId = this.pm.providerId;
+    const wrap = this.chatContainer.createDiv("cc-thinking-placeholder");
+    wrap.dataset.provider = provId;
+    const dot = wrap.createSpan({ cls: "cc-thinking-dot" });
+    dot.dataset.provider = provId;
+    wrap.createSpan({
+      cls: "cc-thinking-text",
+      text: `${PROVIDER_LABELS[provId]} is thinking`,
+    });
+    const dots = wrap.createSpan({ cls: "cc-thinking-dots" });
+    dots.createSpan({ text: "·" });
+    dots.createSpan({ text: "·" });
+    dots.createSpan({ text: "·" });
+    this.thinkingPlaceholder = wrap;
+    this.scrollToBottom();
+  }
+
+  private hideThinkingPlaceholder(): void {
+    if (this.thinkingPlaceholder) {
+      this.thinkingPlaceholder.remove();
+      this.thinkingPlaceholder = null;
+    }
+  }
+
+  /** Compact pill for auto-synthesis follow-ups (Faz 8 consult flow). */
+  private renderSynthesisPill(msg: ChatMessage): void {
+    const meta = msg.synthesisMeta!;
+    const pill = this.chatContainer.createDiv("cc-synthesis-pill");
+    pill.dataset.consulted = meta.consultedProvider;
+    const dot = pill.createSpan("cc-synthesis-pill-dot");
+    dot.dataset.provider = meta.consultedProvider;
+    pill.createSpan({
+      cls: "cc-synthesis-pill-text",
+      text: `Synthesis requested based on ${meta.consultedLabel}'s input`,
+    });
+    const toggle = pill.createSpan({ cls: "cc-synthesis-pill-toggle", text: "view prompt" });
+    const detail = this.chatContainer.createDiv("cc-synthesis-detail is-hidden");
+    detail.createEl("pre").textContent = msg.content;
+    toggle.addEventListener("click", () => {
+      const open = !detail.hasClass("is-hidden");
+      detail.toggleClass("is-hidden", open);
+      toggle.textContent = open ? "view prompt" : "hide prompt";
+    });
+  }
+
   private renderAssistantMessage(msg: ChatMessage): HTMLElement {
     const wrapper = this.chatContainer.createDiv(
       "claude-native-msg claude-native-msg-assistant" + (msg.isStreaming ? " is-streaming" : "")
     );
-    wrapper.createDiv({ cls: "claude-native-msg-label", text: "Claude" });
+    wrapper.dataset.provider = this.pm.providerId;
+    wrapper.createDiv({ cls: "claude-native-msg-label", text: PROVIDER_LABELS[this.pm.providerId] || "Assistant" });
     this.renderAssistantContent(wrapper, msg);
+    // Restored historical messages get the same "ask another model" affordance.
+    if (!msg.isStreaming) {
+      const footer = wrapper.createDiv("cc-response-footer");
+      this.attachMessageActions(footer, msg);
+    }
     return wrapper;
   }
 
@@ -1884,7 +2848,7 @@ export class ClaudeChatView extends ItemView {
     if (!msg.segments || msg.segments.length === 0) {
       // Full re-render for non-segment messages
       el.empty();
-      el.createDiv({ cls: "claude-native-msg-label", text: "Claude" });
+      el.createDiv({ cls: "claude-native-msg-label", text: PROVIDER_LABELS[this.pm.providerId] || "Assistant" });
       this.renderAssistantContent(el, msg);
       return;
     }
@@ -2354,9 +3318,21 @@ export class ClaudeChatView extends ItemView {
     this.inputEl.setCssProps({ "--cc-input-height": Math.min(this.inputEl.scrollHeight, 160) + "px" });
   }
 
+  /**
+   * Sticky-bottom auto-scroll: only forces the chat to the bottom if the
+   * user was already pinned there. If they've scrolled up to read an older
+   * message, leave them alone (and surface a "↓ new" indicator separately
+   * — TODO once the message renderer is split out).
+   */
   private scrollToBottom(): void {
+    const el = this.chatContainer;
+    if (!el) return;
+    const threshold = 80; // px from bottom counts as "at bottom"
+    const distanceFromBottom = el.scrollHeight - (el.scrollTop + el.clientHeight);
+    const userAtBottom = distanceFromBottom <= threshold;
+    if (!userAtBottom) return;
     requestAnimationFrame(() => {
-      this.chatContainer.scrollTop = this.chatContainer.scrollHeight;
+      el.scrollTop = el.scrollHeight;
     });
   }
 

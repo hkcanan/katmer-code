@@ -58,6 +58,7 @@ export default class ClaudeNativePlugin extends Plugin {
     await this.loadSettings();
     this.loadSkillContents();
     this.syncSkills();
+    this.startClaudeMdMirror();
 
     // Register the chat view
     this.registerView(VIEW_TYPE_CLAUDE, (leaf) => {
@@ -124,12 +125,166 @@ export default class ClaudeNativePlugin extends Plugin {
     // Clean up persistent CLI process
     void this.getChatView()?.onClose();
     // Skills stay installed — they're global (~/.claude/commands/) and useful outside the plugin.
-    // Removing them on every Obsidian quit would break the "available in all sessions" promise.
-    // Skills are only removed when explicitly disabled in settings (syncSkills handles that).
-    // Stop report watcher
     if (this._reportWatcher) {
       this._reportWatcher.close();
       this._reportWatcher = null;
+    }
+    for (const w of this._mirrorWatchers) {
+      try { w.close(); } catch { /* ignore */ }
+    }
+    this._mirrorWatchers = [];
+  }
+
+  // ── CLAUDE.md mirror ─────────────────────────────────────────────
+  //
+  // Each provider CLI reads instructions from a different filename:
+  //   Claude       → ~/CLAUDE.md (or ~/.claude/CLAUDE.md)
+  //   Gemini       → ~/.gemini/GEMINI.md
+  //   Codex        → ~/.codex/AGENTS.md
+  //   Antigravity  → ~/.gemini/GEMINI.md  (same as Gemini, per migration docs)
+  //
+  // When the user toggles the setting on, we copy CLAUDE.md into each
+  // target (with a KatmerCode header) and watch the source. Mirror files
+  // we wrote can be safely overwritten; user-owned files are skipped.
+
+  private readonly mirrorHeader = "<!-- Auto-synced from CLAUDE.md by KatmerCode -->";
+
+  /** Active Obsidian vault root, if available. */
+  private vaultRoot(): string | null {
+    const adapter = this.app.vault.adapter as { basePath?: string };
+    return adapter.basePath || null;
+  }
+
+  /**
+   * All mirror pairs the plugin manages.
+   *   • Global scope:  ~/CLAUDE.md  → ~/.gemini/GEMINI.md, ~/.codex/AGENTS.md
+   *   • Vault scope:   <vault>/CLAUDE.md → <vault>/GEMINI.md, <vault>/AGENTS.md
+   *
+   * Each scope is independent — vault rules apply only when CLI runs
+   * with that vault as cwd (which this plugin does).
+   */
+  private resolveMirrorPairs(): Array<{
+    scope: "global" | "vault";
+    source: string;
+    targets: Array<{ path: string; label: string }>;
+  }> {
+    const home = homedir();
+    const vault = this.vaultRoot();
+    const pairs: ReturnType<typeof this.resolveMirrorPairs> = [];
+
+    // Global
+    const globalCandidates = [join(home, "CLAUDE.md"), join(home, ".claude", "CLAUDE.md")];
+    const globalSource = globalCandidates.find((p) => existsSync(p));
+    if (globalSource) {
+      pairs.push({
+        scope: "global",
+        source: globalSource,
+        targets: [
+          { path: join(home, ".gemini", "GEMINI.md"), label: "Gemini (global)" },
+          { path: join(home, ".codex",  "AGENTS.md"),  label: "Codex / Antigravity (global)" },
+        ],
+      });
+    }
+
+    // Vault
+    if (vault) {
+      const vaultSource = join(vault, "CLAUDE.md");
+      if (existsSync(vaultSource)) {
+        pairs.push({
+          scope: "vault",
+          source: vaultSource,
+          targets: [
+            { path: join(vault, "GEMINI.md"), label: "Gemini (vault)" },
+            { path: join(vault, "AGENTS.md"), label: "Codex / Antigravity (vault)" },
+          ],
+        });
+      }
+    }
+    return pairs;
+  }
+
+  /** Copy CLAUDE.md (both scopes) to mirror targets, skipping user-owned files. */
+  mirrorClaudeMdNow(): { copied: number; skipped: string[]; sourceFound: boolean; scopes: string[] } {
+    const pairs = this.resolveMirrorPairs();
+    if (pairs.length === 0) return { copied: 0, skipped: [], sourceFound: false, scopes: [] };
+    let copied = 0;
+    const skipped: string[] = [];
+    const scopes: string[] = [];
+    for (const pair of pairs) {
+      let body: string;
+      try { body = readFileSync(pair.source, "utf-8"); }
+      catch { continue; }
+      const stamped = `${this.mirrorHeader}\n${body}`;
+      scopes.push(pair.scope);
+      for (const t of pair.targets) {
+        try {
+          const parent = join(t.path, "..");
+          if (!existsSync(parent)) mkdirSync(parent, { recursive: true });
+          if (existsSync(t.path)) {
+            const existing = readFileSync(t.path, "utf-8");
+            if (!existing.startsWith(this.mirrorHeader)) {
+              skipped.push(`${t.label}: file exists with user content (left alone)`);
+              continue;
+            }
+          }
+          writeFileSync(t.path, stamped, "utf-8");
+          copied++;
+        } catch (err) {
+          skipped.push(`${t.label}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }
+    return { copied, skipped, sourceFound: true, scopes };
+  }
+
+  private _mirrorWatchers: Array<ReturnType<typeof watch>> = [];
+
+  /** Start (or restart) watchers when the setting is enabled. Watches both
+   *  global and vault CLAUDE.md sources so any edit propagates. */
+  startClaudeMdMirror(): void {
+    for (const w of this._mirrorWatchers) {
+      try { w.close(); } catch { /* ignore */ }
+    }
+    this._mirrorWatchers = [];
+    if (!this.settings.mirrorClaudeMd) return;
+    const pairs = this.resolveMirrorPairs();
+    if (pairs.length === 0) return;
+    // First sync on enable
+    this.mirrorClaudeMdNow();
+    // Watch each source
+    for (const pair of pairs) {
+      try {
+        const w = watch(pair.source, () => {
+          this.mirrorClaudeMdNow();
+        });
+        this._mirrorWatchers.push(w);
+      } catch (err) {
+        console.warn(`[katmer-code] CLAUDE.md watcher failed for ${pair.source}:`, err);
+      }
+    }
+  }
+
+  /** Delete the auto-mirrored files (only ones we own). */
+  removeClaudeMdMirror(): void {
+    const pairs = this.resolveMirrorPairs();
+    // Also include any target whose source isn't found anymore (cleanup).
+    const home = homedir();
+    const vault = this.vaultRoot();
+    const allTargets = [
+      join(home, ".gemini", "GEMINI.md"),
+      join(home, ".codex", "AGENTS.md"),
+      ...(vault ? [join(vault, "GEMINI.md"), join(vault, "AGENTS.md")] : []),
+      ...pairs.flatMap((p) => p.targets.map((t) => t.path)),
+    ];
+    for (const path of allTargets) {
+      try {
+        if (existsSync(path)) {
+          const existing = readFileSync(path, "utf-8");
+          if (existing.startsWith(this.mirrorHeader)) {
+            unlinkSync(path);
+          }
+        }
+      } catch { /* ignore */ }
     }
   }
 

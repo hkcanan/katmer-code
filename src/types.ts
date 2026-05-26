@@ -84,7 +84,7 @@ export type ClaudeEvent =
 // ── UI State ──
 
 export type ContentSegment =
-  | { type: "text"; text: string }
+  | { type: "text"; text: string; fromStream?: boolean }
   | { type: "tool"; tool: ToolCallInfo };
 
 export interface ChatMessage {
@@ -98,6 +98,29 @@ export interface ChatMessage {
   isStreaming?: boolean;
   /** Attached context shown in user message bubble */
   attachments?: Array<{ type: "selection" | "file"; name: string; preview?: string }>;
+  /**
+   * Auto-generated synthesis prompt sent after consulting another model.
+   * Render as a compact pill instead of a full user bubble — the user
+   * didn't actually type this, it's a system follow-up.
+   */
+  synthesisMeta?: {
+    consultedProvider: ProviderId;
+    consultedLabel: string;
+  };
+  /**
+   * Inline marker for mid-conversation model/provider switches. The
+   * message itself has role:"system" and renders as a horizontal
+   * divider so the user can see exactly when the backend changed.
+   */
+  switchMeta?: {
+    kind: "model" | "provider";
+    fromProvider: ProviderId;
+    fromModel: string;
+    toProvider: ProviderId;
+    toModel: string;
+    /** Provider switches break conversation context — flag for warning UI. */
+    contextLost: boolean;
+  };
 }
 
 export interface ToolCallInfo {
@@ -189,7 +212,93 @@ export const CATEGORY_LABELS: Record<string, string> = {
 
 export type PermissionMode = "default" | "acceptEdits" | "bypassPermissions";
 
+export type ProviderId = "claude" | "gemini" | "codex" | "antigravity";
+
+export interface ProviderConfig {
+  /** Optional CLI path override; empty = auto-detect. */
+  cliPath: string;
+}
+
+/** Long-form labels — used in headers, settings, badges. */
+export const PROVIDER_LABELS: Record<ProviderId, string> = {
+  claude: "Claude Code",
+  gemini: "Gemini",
+  codex: "Codex",
+  antigravity: "Antigravity",
+};
+
+/** Compact labels for narrow contexts (picker tabs, tab strip). */
+export const PROVIDER_LABELS_SHORT: Record<ProviderId, string> = {
+  claude: "Claude",
+  gemini: "Gemini",
+  codex: "Codex",
+  antigravity: "Antigrav.",
+};
+
+export interface ModelOption {
+  /** Wire identifier passed to the adapter. */
+  id: string;
+  /** Short label for the model picker. */
+  label: string;
+  /** Hint shown under the label. */
+  desc: string;
+  /** Max input tokens the model accepts. Used to fill the context strip
+   *  when the provider's own result event doesn't carry a window value. */
+  contextWindow?: number;
+}
+
+/**
+ * Model menus shown per provider. The first entry of each provider is the
+ * default selection when switching to that provider for the first time.
+ */
+export const PROVIDER_MODELS: Record<ProviderId, ModelOption[]> = {
+  claude: [
+    { id: "opus[1m]", label: "Opus 1M", desc: "Most capable, 1M extended context", contextWindow: 1_000_000 },
+    { id: "opus", label: "Opus", desc: "Most capable, 200K context", contextWindow: 200_000 },
+    { id: "sonnet", label: "Sonnet", desc: "Balanced for everyday tasks", contextWindow: 200_000 },
+    { id: "haiku", label: "Haiku", desc: "Fastest for quick answers", contextWindow: 200_000 },
+  ],
+  gemini: [
+    // Models exposed by Gemini CLI's /model picker. 3.x family requires
+    // Google AI Pro (Google One) or paid tier; 2.5 family works on free
+    // accounts too. Verified by querying the live CLI.
+    { id: "gemini-3.1-pro-preview", label: "3.1 Pro Preview", desc: "Latest, complex reasoning (AI Pro)", contextWindow: 1_048_576 },
+    { id: "gemini-3-flash-preview", label: "3 Flash Preview", desc: "Fast preview tier (AI Pro)", contextWindow: 1_000_000 },
+    { id: "gemini-3.1-flash-lite-preview", label: "3.1 Flash Lite Preview", desc: "Lightest preview tier", contextWindow: 1_000_000 },
+    { id: "gemini-2.5-pro", label: "2.5 Pro", desc: "Stable, 1M context", contextWindow: 1_048_576 },
+    { id: "gemini-2.5-flash", label: "2.5 Flash", desc: "Fast and balanced", contextWindow: 1_048_576 },
+    { id: "gemini-2.5-flash-lite", label: "Flash Lite", desc: "Fastest, lightweight", contextWindow: 1_000_000 },
+  ],
+  codex: [
+    { id: "gpt-5.5", label: "GPT-5.5", desc: "Current flagship, complex coding", contextWindow: 400_000 },
+    { id: "gpt-5.4-mini", label: "GPT-5.4 Mini", desc: "Codex-mini, faster for subagents", contextWindow: 128_000 },
+    { id: "gpt-5.3-codex", label: "GPT-5.3 Codex", desc: "Previous codex generation", contextWindow: 400_000 },
+    { id: "gpt-5.4", label: "GPT-5.4", desc: "Previous pro tier", contextWindow: 400_000 },
+  ],
+  antigravity: [
+    // Antigravity CLI v1.0.2 is hard-coded to Gemini 3.5 Flash; no model
+    // selection flag yet. Single entry so the picker isn't empty.
+    { id: "gemini-3.5-flash", label: "3.5 Flash", desc: "Antigravity-only (subscription)", contextWindow: 1_000_000 },
+  ],
+};
+
+/** Look up a model's context window from the catalog, with sensible
+ *  fallback for unknown ids. */
+export function lookupContextWindow(providerId: ProviderId, modelId: string): number {
+  const models = PROVIDER_MODELS[providerId] || [];
+  const found = models.find((m) => m.id === modelId);
+  return found?.contextWindow || 200_000;
+}
+
+export const PROVIDER_INSTALL_HINTS: Record<ProviderId, string> = {
+  claude: "npm install -g @anthropic-ai/claude-code && claude",
+  gemini: "npm install -g @google/gemini-cli && gemini",
+  codex: "npm install -g @openai/codex && codex login",
+  antigravity: "curl -fsSL https://antigravity.google/cli/install.sh | bash && agy",
+};
+
 export interface ClaudeNativeSettings {
+  /** Claude CLI path (legacy; per-provider overrides live in `providers`). */
   cliPath: string;
   workingDirectory: string;
   defaultModel: ModelChoice;
@@ -200,6 +309,13 @@ export interface ClaudeNativeSettings {
   showCostInfo: boolean;
   sessions: SavedSession[];
   enabledSkills: string[];  // skill IDs
+  /** Which backend handles chat by default. */
+  defaultProvider: ProviderId;
+  /** Per-provider overrides — CLI path, auth hints, etc. */
+  providers: Record<ProviderId, ProviderConfig>;
+  /** Mirror ~/CLAUDE.md to ~/.gemini/GEMINI.md + ~/.codex/AGENTS.md so
+   *  the same instructions reach every provider. */
+  mirrorClaudeMd: boolean;
 }
 
 export const DEFAULT_SETTINGS: ClaudeNativeSettings = {
@@ -213,4 +329,12 @@ export const DEFAULT_SETTINGS: ClaudeNativeSettings = {
   showCostInfo: true,
   sessions: [],
   enabledSkills: [],
+  defaultProvider: "claude",
+  providers: {
+    claude: { cliPath: "" },
+    gemini: { cliPath: "" },
+    codex: { cliPath: "" },
+    antigravity: { cliPath: "" },
+  },
+  mirrorClaudeMd: false,
 };

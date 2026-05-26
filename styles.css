@@ -73,6 +73,117 @@
 
 .claude-native-controls { display: flex; gap: 4px; }
 
+.cc-provider-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-family: var(--cc-mono);
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border: 1px solid var(--cc-border-subtle);
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+  transition: filter 0.15s ease;
+}
+
+.cc-provider-badge:hover {
+  filter: brightness(1.1);
+}
+
+.cc-provider-switcher {
+  position: absolute;
+  top: 38px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--cc-border-subtle);
+  background: var(--background-primary);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+  gap: 2px;
+}
+
+.cc-provider-switcher.is-hidden { display: none; }
+
+.cc-provider-switcher-item {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+
+.cc-provider-switcher-item:hover {
+  background: var(--background-modifier-hover);
+}
+
+.cc-provider-switcher-item.is-active {
+  background: var(--background-modifier-active-hover);
+}
+
+.cc-provider-switcher-name {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-normal);
+}
+
+.cc-provider-switcher-status {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.claude-native-title-row {
+  position: relative;
+}
+
+.cc-provider-badge[data-provider="claude"] {
+  color: #c97b3b;
+  border-color: rgba(201, 123, 59, 0.35);
+}
+
+.cc-provider-badge[data-provider="gemini"] {
+  color: #4285f4;
+  border-color: rgba(66, 133, 244, 0.35);
+}
+
+.cc-provider-badge[data-provider="codex"] {
+  color: #10a37f;
+  border-color: rgba(16, 163, 127, 0.35);
+}
+
+.cc-provider-badge[data-provider="antigravity"] {
+  color: #8a6cff;
+  border-color: rgba(138, 108, 255, 0.35);
+}
+
+/* Per-tab provider indicator — small dot in the tab header */
+.cc-tab-provider-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+  background: var(--text-muted);
+}
+
+.cc-tab-provider-dot[data-provider="claude"]      { background: #c97b3b; }
+.cc-tab-provider-dot[data-provider="gemini"]      { background: #4285f4; }
+.cc-tab-provider-dot[data-provider="codex"]       { background: #10a37f; }
+.cc-tab-provider-dot[data-provider="antigravity"] { background: #8a6cff; }
+
 .claude-native-btn {
   display: flex;
   align-items: center;
@@ -388,10 +499,10 @@
 .cc-model-trigger {
   display: flex;
   align-items: center;
-  gap: 3px;
-  padding: 5px 10px;
+  gap: 6px;
+  padding: 4px 10px 4px 12px;
   border: 1px solid var(--cc-border-subtle);
-  border-radius: 20px;
+  border-radius: 16px;
   cursor: pointer;
   transition: all 150ms;
   user-select: none;
@@ -400,11 +511,86 @@
   border-color: var(--cc-border);
   background: var(--cc-cream-dark);
 }
-.cc-model-text {
+.cc-trigger-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.1;
+}
+.cc-trigger-provider {
+  font-family: var(--cc-mono);
+  font-size: 0.55rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 1px;
+}
+.cc-trigger-provider[data-provider="claude"]      { color: #c97b3b; }
+.cc-trigger-provider[data-provider="gemini"]      { color: #4285f4; }
+.cc-trigger-provider[data-provider="codex"]       { color: #10a37f; }
+.cc-trigger-provider[data-provider="antigravity"] { color: #8a6cff; }
+.cc-trigger-model {
   font-size: 0.78rem;
   font-weight: 500;
   color: var(--cc-text-secondary);
 }
+.cc-model-text {  /* legacy class kept for back-compat */
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--cc-text-secondary);
+}
+
+/* Unified picker: provider tabs row */
+.cc-popup-provider-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 6px 6px 0;
+}
+.cc-provider-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.1s;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  flex: 1;
+  justify-content: center;
+}
+.cc-provider-tab:hover { background: var(--background-modifier-hover); }
+.cc-provider-tab.is-active {
+  background: var(--background-modifier-active-hover);
+  color: var(--text-normal);
+  font-weight: 500;
+}
+.cc-provider-tab.is-unavailable { opacity: 0.55; }
+.cc-provider-tab-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.cc-provider-tab-dot[data-provider="claude"]      { background: #c97b3b; }
+.cc-provider-tab-dot[data-provider="gemini"]      { background: #4285f4; }
+.cc-provider-tab-dot[data-provider="codex"]       { background: #10a37f; }
+.cc-provider-tab-dot[data-provider="antigravity"] { background: #8a6cff; }
+.cc-provider-tab-name { font-size: 0.78rem; }
+.cc-provider-tab-warn {
+  font-size: 0.65rem;
+  color: var(--text-error);
+  margin-left: 2px;
+}
+
+.cc-popup-empty {
+  padding: 12px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+.cc-popup-effort-wrap:empty { display: none; }
 .cc-chevron { display: flex; color: var(--cc-text-tertiary); }
 .cc-chevron svg { width: 12px; height: 12px; }
 
@@ -451,9 +637,10 @@
 }
 .cc-popup-item:hover { background: var(--cc-cream); }
 .cc-popup-item.is-active { background: var(--cc-cream-dark); }
+/* Legacy active marker — superseded by the Modern Sharp row check below.
+ * Keep the rule but kill its content so we don't render two ticks. */
 .cc-popup-item.is-active .cc-popup-item-name::after {
-  content: " ✓";
-  color: var(--cc-accent);
+  content: none;
 }
 .cc-popup-item-name {
   font-size: 0.85rem;
@@ -1042,6 +1229,13 @@
   border: 1px solid rgba(100,140,180,0.2);
 }
 
+/* Skill running via prompt-injection on non-Claude providers */
+.cc-skill-badge-inject {
+  background: rgba(138, 108, 255, 0.12);
+  color: #8a6cff;
+  border: 1px solid rgba(138, 108, 255, 0.25);
+}
+
 /* ── Tab bar ── */
 .cc-tab-bar {
   display: flex; gap: 2px; padding: 0 8px;
@@ -1085,15 +1279,28 @@
 }
 .cc-tab-title {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 1;    /* take available width so the × is pushed to the right */
+  min-width: 0;
 }
 .cc-tab-close {
-  flex-shrink: 0; opacity: 0; color: var(--text-faint);
-  display: flex; align-items: center;
-  transition: opacity 100ms;
+  flex-shrink: 0;
+  opacity: 1;
+  color: var(--cc-text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-left: auto;     /* pin × to the far right of the tab */
+  border-radius: 4px;
+  transition: background-color 80ms, color 80ms;
 }
-.cc-tab-close svg { width: 12px; height: 12px; }
-.cc-tab:hover .cc-tab-close { opacity: 0.5; }
-.cc-tab-close:hover { opacity: 1 !important; color: var(--text-error); }
+.cc-tab-close svg { width: 11px; height: 11px; }
+.cc-tab-close:hover {
+  background: rgba(204,95,74,0.18);
+  color: #C45A3C;
+}
+.theme-dark .cc-tab-close:hover { background: rgba(204,95,74,0.25); }
 
 /* ── Code block enhancements ── */
 .cc-code-header {
@@ -1254,4 +1461,1101 @@
   top: -9999px;
   left: -9999px;
   opacity: 0;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   MODERN SHARP REDESIGN (v0.5+)
+   Linear/Cursor sensibility — dense, sharp, mono accents,
+   brand-color rails. Overrides earlier soft-card styles.
+   Keep this block LAST so cascade wins.
+   ═══════════════════════════════════════════════════════════════ */
+
+.claude-native-root {
+  --c-claude: #c97b3b;
+  --c-gemini: #4285f4;
+  --c-codex:  #10a37f;
+  --c-anti:   #8a6cff;
+}
+
+/* ── Header ─────────────────────────────────────────────────── */
+.claude-native-root .claude-native-header {
+  background: linear-gradient(180deg, rgba(255,255,255,0.45), transparent);
+  padding: 12px 14px 8px;
+  border-bottom: 1px solid var(--cc-border-subtle);
+}
+.claude-native-root .claude-native-title {
+  font-family: var(--cc-mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--cc-text);
+  text-transform: uppercase;
+}
+.claude-native-root .claude-native-title::before {
+  content: "◐";
+  color: var(--cc-accent);
+  margin-right: 6px;
+  font-family: var(--cc-font);
+}
+
+.claude-native-root .cc-provider-badge {
+  font-size: 9px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  cursor: default;
+  margin-left: 8px;
+  letter-spacing: 0.1em;
+  font-weight: 600;
+}
+
+.claude-native-root .claude-native-btn {
+  width: 26px;
+  height: 26px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--cc-text-tertiary);
+}
+.claude-native-root .claude-native-btn:hover {
+  background: rgba(0,0,0,0.04);
+  border-color: var(--cc-border-subtle);
+  color: var(--cc-text);
+}
+.theme-dark .claude-native-root .claude-native-btn:hover {
+  background: rgba(255,255,255,0.05);
+}
+
+/* ── Tab bar — segmented control ───────────────────────────── */
+.claude-native-root .cc-tab-bar {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  margin: 4px 0 8px;
+  background: var(--cc-cream-dark);
+  border-radius: 7px;
+  overflow-x: auto;
+}
+.claude-native-root .cc-tab {
+  flex: 1;
+  padding: 5px 8px;
+  border-radius: 5px;
+  font-size: 11.5px;
+  font-weight: 500;
+  background: transparent;
+  border: none;
+  color: var(--cc-text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: none;
+}
+.claude-native-root .cc-tab:hover {
+  background: rgba(255,255,255,0.45);
+}
+.theme-dark .claude-native-root .cc-tab:hover {
+  background: rgba(255,255,255,0.04);
+}
+.claude-native-root .cc-tab.is-active {
+  background: var(--cc-surface);
+  color: var(--cc-text);
+  border: none;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+  font-weight: 600;
+}
+.claude-native-root .cc-tab-provider-dot {
+  width: 5px;
+  height: 5px;
+  margin-right: 0;
+  flex-shrink: 0;
+}
+
+/* ── Context strip — thin progress bar ─────────────────────── */
+.claude-native-root .claude-native-context-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+}
+.claude-native-root .claude-native-context-bar {
+  flex: 1;
+  height: 3px;
+  background: var(--cc-cream-dark);
+  border-radius: 999px;
+  overflow: hidden;
+  min-width: 60px;
+}
+.claude-native-root .claude-native-context-fill {
+  height: 100%;
+  background: var(--cc-accent);
+  border-radius: 999px;
+  transition: width 200ms ease;
+}
+.claude-native-root .claude-native-context-label {
+  font-size: 10px;
+  font-family: var(--cc-mono);
+  color: var(--cc-text-tertiary);
+}
+.claude-native-root .claude-native-status {
+  font-size: 0.62rem;
+  margin-top: 6px;
+  padding: 0;
+}
+
+/* ── User message — right-aligned chip ─────────────────────── */
+.claude-native-root .claude-native-msg-user {
+  background: var(--cc-surface);
+  border: 1px solid var(--cc-border-subtle);
+  border-radius: 10px 10px 4px 10px;
+  padding: 9px 13px;
+  font-size: 13px;
+  line-height: 1.5;
+  margin-left: 32px;
+  margin-bottom: 14px;
+  box-shadow: none;
+}
+.claude-native-root .claude-native-msg-user .claude-native-msg-label {
+  display: none;
+}
+
+/* ── Assistant message — tag + body, no card ───────────────── */
+.claude-native-root .claude-native-msg-assistant {
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin-bottom: 18px;
+}
+.claude-native-root .claude-native-msg-assistant .claude-native-msg-label {
+  font-family: var(--cc-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--cc-accent);
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.claude-native-root .claude-native-msg-assistant .claude-native-msg-label::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--cc-accent);
+  box-shadow: 0 0 0 2px rgba(217,119,87,0.18);
+}
+/* Provider-tinted label */
+.claude-native-root .claude-native-msg-assistant[data-provider="claude"]      .claude-native-msg-label { color: var(--c-claude); }
+.claude-native-root .claude-native-msg-assistant[data-provider="gemini"]      .claude-native-msg-label { color: var(--c-gemini); }
+.claude-native-root .claude-native-msg-assistant[data-provider="codex"]       .claude-native-msg-label { color: var(--c-codex); }
+.claude-native-root .claude-native-msg-assistant[data-provider="antigravity"] .claude-native-msg-label { color: var(--c-anti); }
+.claude-native-root .claude-native-msg-assistant[data-provider="claude"]      .claude-native-msg-label::before { background: var(--c-claude); box-shadow: 0 0 0 2px rgba(201,123,59,0.2); }
+.claude-native-root .claude-native-msg-assistant[data-provider="gemini"]      .claude-native-msg-label::before { background: var(--c-gemini); box-shadow: 0 0 0 2px rgba(66,133,244,0.2); }
+.claude-native-root .claude-native-msg-assistant[data-provider="codex"]       .claude-native-msg-label::before { background: var(--c-codex); box-shadow: 0 0 0 2px rgba(16,163,127,0.2); }
+.claude-native-root .claude-native-msg-assistant[data-provider="antigravity"] .claude-native-msg-label::before { background: var(--c-anti); box-shadow: 0 0 0 2px rgba(138,108,255,0.2); }
+
+.claude-native-root .claude-native-msg-assistant .claude-native-msg-body {
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--cc-text);
+}
+
+/* ── Tool call card — 3px provider rail + body + badge ─────── */
+.claude-native-root .claude-native-tool {
+  position: relative;
+  background: var(--cc-surface);
+  border: 1px solid var(--cc-border-subtle);
+  border-radius: 8px;
+  margin: 8px 0;
+  overflow: hidden;
+  padding-left: 3px;
+}
+.claude-native-root .claude-native-tool::before {
+  content: "";
+  position: absolute;
+  top: 0; bottom: 0; left: 0;
+  width: 3px;
+  background: var(--cc-accent);
+}
+/* Tool bar color matches the message's provider */
+.claude-native-root [data-provider="claude"]      .claude-native-tool::before,
+.claude-native-root .claude-native-tool[data-provider="claude"]::before      { background: var(--c-claude); }
+.claude-native-root [data-provider="gemini"]      .claude-native-tool::before,
+.claude-native-root .claude-native-tool[data-provider="gemini"]::before      { background: var(--c-gemini); }
+.claude-native-root [data-provider="codex"]       .claude-native-tool::before,
+.claude-native-root .claude-native-tool[data-provider="codex"]::before       { background: var(--c-codex); }
+.claude-native-root [data-provider="antigravity"] .claude-native-tool::before,
+.claude-native-root .claude-native-tool[data-provider="antigravity"]::before { background: var(--c-anti); }
+
+.claude-native-root .claude-native-tool-header {
+  padding: 9px 12px;
+  gap: 8px;
+}
+.claude-native-root .claude-native-tool-name {
+  font-family: var(--cc-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--cc-text);
+  letter-spacing: 0;
+}
+.claude-native-root .claude-native-tool-icon { color: var(--cc-text-secondary); }
+.claude-native-root .claude-native-tool-summary {
+  font-family: var(--cc-mono);
+  font-size: 10.5px;
+  color: var(--cc-text-secondary);
+  letter-spacing: 0;
+}
+
+/* ── Edit diff card — same shape as tool, with status pill ─── */
+.claude-native-root .claude-native-diff {
+  position: relative;
+  background: var(--cc-surface);
+  border: 1px solid var(--cc-border-subtle);
+  border-radius: 8px;
+  margin: 8px 0;
+  padding-left: 3px;
+  overflow: hidden;
+}
+.claude-native-root .claude-native-diff::before {
+  content: "";
+  position: absolute;
+  top: 0; bottom: 0; left: 0;
+  width: 3px;
+  background: var(--cc-accent);
+}
+.claude-native-root [data-provider="gemini"] .claude-native-diff::before { background: var(--c-gemini); }
+.claude-native-root [data-provider="claude"] .claude-native-diff::before { background: var(--c-claude); }
+.claude-native-root [data-provider="codex"]  .claude-native-diff::before { background: var(--c-codex); }
+.claude-native-root [data-provider="antigravity"] .claude-native-diff::before { background: var(--c-anti); }
+.claude-native-root .claude-native-diff-title {
+  font-family: var(--cc-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--cc-text);
+}
+.claude-native-root .claude-native-diff-status {
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+}
+
+/* ── Empty state ─────────────────────────────────────────────── */
+.claude-native-root .claude-native-empty {
+  align-items: center;
+  text-align: center;
+  padding: 80px 24px;
+}
+.claude-native-root .claude-native-empty-title {
+  font-family: var(--cc-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--cc-text);
+  margin-bottom: 6px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.claude-native-root .claude-native-empty-subtitle {
+  font-size: 12px;
+  color: var(--cc-text-tertiary);
+}
+
+/* ── Input area — sharp + dense ─────────────────────────────── */
+.claude-native-root .cc-input-area {
+  padding: 10px 14px 14px;
+  background: var(--cc-cream-dark);
+  border-top: 1px solid var(--cc-border-subtle);
+}
+.claude-native-root .cc-input-box {
+  border: 1px solid var(--cc-border-subtle);
+  border-radius: 10px;
+  background: var(--cc-surface);
+  box-shadow: none;
+}
+.claude-native-root .cc-input-box:focus-within {
+  border-color: var(--cc-border);
+  box-shadow: 0 0 0 2px rgba(217,119,87,0.08);
+}
+.claude-native-root .cc-textarea {
+  font-size: 13px;
+  padding: 10px 12px 4px;
+}
+.claude-native-root .cc-bottom-row {
+  padding: 2px 6px 6px;
+  gap: 4px;
+}
+.claude-native-root .cc-icon-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  border-color: transparent;
+  background: transparent;
+}
+.claude-native-root .cc-icon-btn:hover {
+  background: var(--cc-cream-dark);
+  border-color: transparent;
+}
+
+/* ── Picker trigger — left brand-color rail + segmented pill ── */
+.claude-native-root .cc-model-trigger {
+  display: inline-flex;
+  align-items: stretch;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--cc-border-subtle);
+  border-radius: 6px;
+  background: var(--cc-surface);
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 120ms;
+}
+.claude-native-root .cc-model-trigger:hover {
+  border-color: var(--cc-border);
+}
+.claude-native-root .cc-trigger-inner {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  height: 100%;
+}
+.claude-native-root .cc-trigger-inner::before {
+  content: "";
+  width: 3px;
+  background: var(--cc-trigger-bar, var(--cc-accent));
+  display: block;
+}
+.claude-native-root .cc-trigger-provider {
+  font-size: 9.5px;
+  padding: 0 9px;
+  margin: 0;
+  letter-spacing: 0.1em;
+  font-weight: 600;
+  height: 100%;
+  display: inline-flex;
+  align-items: center;
+  border-right: 1px solid var(--cc-border-subtle);
+}
+.claude-native-root .cc-trigger-model {
+  font-size: 12px;
+  padding: 0 8px;
+  color: var(--cc-text);
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+}
+.claude-native-root .cc-chevron {
+  padding: 0 6px 0 2px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--cc-text-tertiary);
+}
+.claude-native-root .cc-chevron svg {
+  width: 10px;
+  height: 10px;
+}
+
+/* Trigger bar color matches active provider */
+.claude-native-root .cc-model-trigger[data-provider="claude"]      { --cc-trigger-bar: var(--c-claude); }
+.claude-native-root .cc-model-trigger[data-provider="gemini"]      { --cc-trigger-bar: var(--c-gemini); }
+.claude-native-root .cc-model-trigger[data-provider="codex"]       { --cc-trigger-bar: var(--c-codex); }
+.claude-native-root .cc-model-trigger[data-provider="antigravity"] { --cc-trigger-bar: var(--c-anti); }
+
+/* Send button — sharp dark */
+.claude-native-root .cc-send-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  background: var(--cc-text);
+  color: var(--cc-cream);
+  margin-left: 4px;
+}
+.claude-native-root .cc-send-btn:hover {
+  background: var(--cc-accent);
+}
+
+/* ── Picker popup — Raycast Compact (sliding underline) ─── */
+.claude-native-root .cc-popup {
+  border-radius: 8px;
+  border: 1px solid var(--cc-border);
+  background: var(--cc-surface);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04), 0 12px 32px rgba(0,0,0,0.10);
+  padding: 0;
+  overflow: hidden;
+}
+.claude-native-root .cc-popup-provider-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  position: relative;
+  border-bottom: 1px solid var(--cc-border-subtle);
+  background: linear-gradient(180deg, var(--cc-cream-dark), var(--cc-surface));
+  padding: 0;
+  gap: 0;
+}
+.claude-native-root .cc-provider-tab {
+  padding: 11px 4px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--cc-text-tertiary);
+  background: transparent;
+  border-radius: 0;
+  position: relative;
+  flex-direction: row;
+  gap: 0;
+  justify-content: center;
+}
+.claude-native-root .cc-provider-tab:hover { background: rgba(0,0,0,0.025); }
+.claude-native-root .cc-provider-tab .cc-provider-tab-dot { display: none; }
+.claude-native-root .cc-provider-tab .cc-provider-tab-warn {
+  font-size: 9px;
+  margin-left: 4px;
+  color: #C45A3C;
+}
+.claude-native-root .cc-provider-tab.is-active {
+  color: var(--cc-text);
+  background: transparent;
+  font-weight: 600;
+}
+.claude-native-root .cc-provider-tab.is-active::after {
+  content: "";
+  position: absolute;
+  bottom: -1px;
+  left: 12px;
+  right: 12px;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--cc-accent);
+}
+.claude-native-root .cc-provider-tab[data-provider="claude"].is-active::after      { background: var(--c-claude); }
+.claude-native-root .cc-provider-tab[data-provider="gemini"].is-active::after      { background: var(--c-gemini); }
+.claude-native-root .cc-provider-tab[data-provider="codex"].is-active::after       { background: var(--c-codex); }
+.claude-native-root .cc-provider-tab[data-provider="antigravity"].is-active::after { background: var(--c-anti); }
+.claude-native-root .cc-provider-tab.is-unavailable {
+  opacity: 0.55;
+}
+
+.claude-native-root .cc-popup-models {
+  padding: 4px;
+}
+.claude-native-root .cc-popup-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  gap: 8px;
+}
+.claude-native-root .cc-popup-item:hover {
+  background: rgba(0,0,0,0.025);
+}
+.claude-native-root .cc-popup-item.is-active {
+  background: var(--cc-cream-dark);
+}
+.claude-native-root .cc-popup-item.is-active::after {
+  content: "✓";
+  font-size: 13px;
+  color: var(--cc-accent);
+  font-weight: 600;
+  grid-column: 2;
+}
+.claude-native-root .cc-popup-item-name {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--cc-text);
+  letter-spacing: -0.005em;
+}
+.claude-native-root .cc-popup-item-desc {
+  font-size: 11px;
+  color: var(--cc-text-tertiary);
+  margin-top: 2px;
+}
+.claude-native-root .cc-popup-empty {
+  padding: 16px;
+  font-size: 12px;
+  color: var(--cc-text-tertiary);
+  font-style: italic;
+  text-align: center;
+}
+
+/* Effort sub-section */
+.claude-native-root .cc-popup-divider {
+  height: 1px;
+  background: var(--cc-border-subtle);
+  margin: 0;
+}
+.claude-native-root .cc-popup-effort {
+  padding: 10px 12px 12px;
+}
+.claude-native-root .cc-popup-effort-title {
+  font-family: var(--cc-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--cc-text-tertiary);
+  margin-bottom: 6px;
+}
+.claude-native-root .cc-popup-effort-row {
+  display: flex;
+  gap: 4px;
+}
+.claude-native-root .cc-pill {
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 4px;
+  background: transparent;
+  border: 1px solid var(--cc-border-subtle);
+  color: var(--cc-text-secondary);
+  font-weight: 500;
+  cursor: pointer;
+}
+.claude-native-root .cc-pill:hover { border-color: var(--cc-border); }
+.claude-native-root .cc-pill.is-active {
+  background: var(--cc-text);
+  color: var(--cc-cream);
+  border-color: var(--cc-text);
+}
+
+/* Stop button — same sharp aesthetic */
+.claude-native-root .cc-stop-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid var(--cc-border-subtle);
+  color: var(--cc-text-secondary);
+  margin-left: 4px;
+}
+.claude-native-root .cc-stop-btn:hover {
+  background: rgba(0,0,0,0.05);
+  border-color: var(--cc-border);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   PERFORMANCE TWEAKS (v0.5.1)
+   Make hover + active state feel instant instead of "loading".
+   ═══════════════════════════════════════════════════════════════ */
+.claude-native-root .cc-tab,
+.claude-native-root .cc-provider-tab,
+.claude-native-root .cc-popup-item,
+.claude-native-root .cc-icon-btn,
+.claude-native-root .cc-model-trigger,
+.claude-native-root .claude-native-btn,
+.claude-native-root .cc-send-btn,
+.claude-native-root .cc-pill {
+  transition: background-color 80ms ease, color 80ms ease, border-color 80ms ease;
+}
+
+/* Popup slides in faster */
+.claude-native-root .cc-popup {
+  animation: cc-popup-in 100ms ease-out;
+}
+@keyframes cc-popup-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Disable the message fade-in for re-renders (chat history) — only
+ * apply on actively-streaming messages to keep new replies feeling
+ * alive without slowing down scroll/tab-switch. */
+.claude-native-root .claude-native-msg { animation: none; }
+.claude-native-root .claude-native-msg.is-streaming {
+  animation: cc-fade 120ms ease-out;
+}
+
+/* Tool status — stalled (turn ended without result, e.g. provider 429) */
+.claude-native-root .cc-tool-status.is-stalled {
+  color: var(--cc-text-tertiary);
+  font-family: var(--cc-mono);
+  font-size: 13px;
+  opacity: 0.7;
+}
+
+/* Effort sub-hint (e.g. "max → high (xhigh only on select models)") */
+.claude-native-root .cc-popup-effort-sub {
+  font-size: 9.5px;
+  font-family: var(--cc-mono);
+  color: var(--cc-text-tertiary);
+  margin-left: 8px;
+  letter-spacing: 0;
+}
+
+/* ── Message footer: duration + compact action buttons ───────── */
+.claude-native-root .cc-response-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--cc-border-subtle);
+}
+.claude-native-root .cc-response-time {
+  font-family: var(--cc-mono);
+  font-size: 10px;
+  color: var(--cc-text-tertiary);
+  font-style: italic;
+}
+.claude-native-root .cc-msg-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+.claude-native-root .cc-msg-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  border: none;
+  color: var(--cc-text-tertiary);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background-color 80ms ease, color 80ms ease;
+  padding: 0;
+}
+.claude-native-root .cc-msg-action-btn:hover {
+  background: var(--cc-cream-dark);
+  color: var(--cc-text);
+}
+.claude-native-root .cc-msg-action-btn svg {
+  width: 13px;
+  height: 13px;
+}
+.claude-native-root .cc-msg-action-btn.is-confirmed {
+  color: var(--cc-accent);
+}
+.claude-native-root .cc-ask-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.claude-native-root .cc-ask-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  min-width: 160px;
+  background: var(--cc-surface);
+  border: 1px solid var(--cc-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.10);
+  padding: 4px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.claude-native-root .cc-ask-menu.is-hidden { display: none; }
+.claude-native-root .cc-ask-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--cc-text);
+  transition: background-color 80ms ease;
+}
+.claude-native-root .cc-ask-item:hover { background: var(--cc-cream-dark); }
+.claude-native-root .cc-ask-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.claude-native-root .cc-ask-dot[data-provider="claude"]      { background: var(--c-claude); }
+.claude-native-root .cc-ask-dot[data-provider="gemini"]      { background: var(--c-gemini); }
+.claude-native-root .cc-ask-dot[data-provider="codex"]       { background: var(--c-codex); }
+.claude-native-root .cc-ask-dot[data-provider="antigravity"] { background: var(--c-anti); }
+.claude-native-root .cc-ask-name {
+  font-weight: 500;
+  letter-spacing: -0.005em;
+}
+
+/* Hardening: provider tabs always single line, model rows align nicely */
+.claude-native-root .cc-provider-tab-name {
+  white-space: nowrap;
+}
+/* Single-line model rows — flex overrides the legacy grid layout. */
+.claude-native-root .cc-popup-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.claude-native-root .cc-popup-item .cc-popup-item-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin: 0;
+}
+.claude-native-root .cc-popup-item .cc-popup-item-desc { display: none; }
+.claude-native-root .cc-popup-item.is-active::after {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+/* ── Inline consultation card (Faz 8) ─────────────────────────
+   Renders when "Consult X" is clicked from a reply footer. Visually
+   distinct from regular AI bubbles — narrower, bordered, with a
+   provider-colored left rail to match the rest of the design language. */
+.claude-native-root .cc-consultation {
+  position: relative;
+  background: var(--cc-cream-soft, var(--cc-cream));
+  border: 1px solid var(--cc-border-subtle);
+  border-radius: 8px;
+  margin: 4px 0 14px 18px;
+  padding: 10px 14px 12px 18px;
+  overflow: hidden;
+  font-size: 13px;
+}
+.claude-native-root .cc-consultation::before {
+  content: "";
+  position: absolute;
+  top: 0; bottom: 0; left: 0;
+  width: 3px;
+  background: var(--cc-accent);
+}
+.claude-native-root .cc-consultation[data-provider="claude"]::before      { background: var(--c-claude); }
+.claude-native-root .cc-consultation[data-provider="gemini"]::before      { background: var(--c-gemini); }
+.claude-native-root .cc-consultation[data-provider="codex"]::before       { background: var(--c-codex); }
+.claude-native-root .cc-consultation[data-provider="antigravity"]::before { background: var(--c-anti); }
+
+.claude-native-root .cc-consultation-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 6px;
+  font-family: var(--cc-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--cc-text-secondary);
+}
+.claude-native-root .cc-consultation-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--cc-accent);
+}
+.claude-native-root .cc-consultation-dot[data-provider="claude"]      { background: var(--c-claude); }
+.claude-native-root .cc-consultation-dot[data-provider="gemini"]      { background: var(--c-gemini); }
+.claude-native-root .cc-consultation-dot[data-provider="codex"]       { background: var(--c-codex); }
+.claude-native-root .cc-consultation-dot[data-provider="antigravity"] { background: var(--c-anti); }
+
+.claude-native-root .cc-consultation-body {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--cc-text);
+}
+.claude-native-root .cc-consultation-body p { margin: 0 0 6px; }
+.claude-native-root .cc-consultation-body p:last-child { margin-bottom: 0; }
+
+.claude-native-root .cc-consultation.is-loading .cc-consultation-body {
+  color: var(--cc-text-tertiary);
+  font-style: italic;
+}
+.claude-native-root .cc-consultation.is-loading .cc-consultation-label::after {
+  content: "";
+  display: inline-block;
+  width: 4px; height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  margin-left: 8px;
+  animation: cc-pulse 1s ease-in-out infinite;
+  vertical-align: middle;
+}
+@keyframes cc-pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+.claude-native-root .cc-consultation.is-error {
+  border-color: rgba(204,95,74,0.3);
+  background: rgba(204,95,74,0.04);
+}
+.claude-native-root .cc-consultation.is-error .cc-consultation-body {
+  color: #C45A3C;
+  font-style: italic;
+}
+
+/* "Open in new tab instead" footer link in the consult menu */
+.claude-native-root .cc-ask-divider {
+  height: 1px;
+  background: var(--cc-border-subtle);
+  margin: 4px 0;
+}
+.claude-native-root .cc-ask-item-sub {
+  font-size: 11px;
+  color: var(--cc-text-tertiary);
+  font-style: italic;
+}
+
+/* ── Provider tab status: ready / no-auth / no-cli ─────────── */
+/* "ready" is the default styling (no opacity change). */
+
+.claude-native-root .cc-provider-tab.is-needs-login {
+  opacity: 0.75;
+}
+.claude-native-root .cc-provider-tab.is-needs-login .cc-provider-tab-dot {
+  background: #C8A33D;  /* amber — CLI present but not authed */
+}
+.claude-native-root .cc-provider-tab-warn-auth {
+  color: #C8A33D;
+}
+
+/* Color-code the inline dot by status (overrides the brand-color rule
+ * only for warning states; "ready" keeps the brand color). */
+.claude-native-root .cc-provider-tab-dot[data-status="no-cli"]  { background: rgba(204,95,74,0.5); }
+.claude-native-root .cc-provider-tab-dot[data-status="no-auth"] { background: #C8A33D; }
+
+/* ── Synthesis pill — compact follow-up after a consult (Faz 8.1) ─── */
+.claude-native-root .cc-synthesis-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  margin: 4px 0 12px 18px;
+  border: 1px dashed var(--cc-border);
+  border-radius: 999px;
+  background: transparent;
+  font-family: var(--cc-mono);
+  font-size: 10.5px;
+  color: var(--cc-text-tertiary);
+  align-self: flex-start;
+}
+.claude-native-root .cc-synthesis-pill-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--cc-accent);
+}
+.claude-native-root .cc-synthesis-pill-dot[data-provider="claude"]      { background: var(--c-claude); }
+.claude-native-root .cc-synthesis-pill-dot[data-provider="gemini"]      { background: var(--c-gemini); }
+.claude-native-root .cc-synthesis-pill-dot[data-provider="codex"]       { background: var(--c-codex); }
+.claude-native-root .cc-synthesis-pill-dot[data-provider="antigravity"] { background: var(--c-anti); }
+
+.claude-native-root .cc-synthesis-pill-text {
+  letter-spacing: 0;
+}
+.claude-native-root .cc-synthesis-pill-toggle {
+  font-size: 9.5px;
+  color: var(--cc-accent);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  margin-left: 4px;
+}
+.claude-native-root .cc-synthesis-pill-toggle:hover {
+  color: var(--cc-accent-hover);
+}
+
+.claude-native-root .cc-synthesis-detail {
+  margin: -6px 0 14px 18px;
+  padding: 10px 12px;
+  background: var(--cc-cream-dark);
+  border-radius: 6px;
+  font-family: var(--cc-mono);
+  font-size: 11px;
+  color: var(--cc-text-secondary);
+  white-space: pre-wrap;
+  max-height: 200px;
+  overflow: auto;
+}
+.claude-native-root .cc-synthesis-detail pre {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: inherit;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+}
+
+/* ── Consult menu — model badge + submenu ──────────────────── */
+.claude-native-root .cc-ask-item {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  padding: 0;
+}
+.claude-native-root .cc-ask-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 5px;
+  transition: background-color 80ms;
+}
+.claude-native-root .cc-ask-row:hover { background: var(--cc-cream-dark); }
+.claude-native-root .cc-ask-name { flex: 1; }
+
+.claude-native-root .cc-ask-model-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--cc-mono);
+  font-size: 10px;
+  color: var(--cc-text-tertiary);
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--cc-cream-dark);
+  cursor: pointer;
+}
+.claude-native-root .cc-ask-model-badge:hover {
+  background: var(--cc-cream);
+  color: var(--cc-text-secondary);
+}
+.claude-native-root .cc-ask-model-label { letter-spacing: 0; }
+.claude-native-root .cc-ask-model-chev {
+  font-size: 9px;
+  opacity: 0.7;
+}
+
+.claude-native-root .cc-ask-submenu {
+  padding: 4px 4px 6px 28px;
+  background: rgba(0,0,0,0.02);
+  border-radius: 0 0 5px 5px;
+}
+.theme-dark .claude-native-root .cc-ask-submenu {
+  background: rgba(255,255,255,0.03);
+}
+.claude-native-root .cc-ask-submenu.is-hidden { display: none; }
+.claude-native-root .cc-ask-sub-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 10px;
+  border-radius: 4px;
+  font-size: 11.5px;
+  color: var(--cc-text-secondary);
+  cursor: pointer;
+}
+.claude-native-root .cc-ask-sub-item:hover {
+  background: var(--cc-cream-dark);
+  color: var(--cc-text);
+}
+.claude-native-root .cc-ask-sub-item.is-active {
+  color: var(--cc-text);
+  font-weight: 500;
+}
+.claude-native-root .cc-ask-sub-check {
+  color: var(--cc-accent);
+  font-size: 11px;
+}
+
+/* Show model in consultation card header */
+.claude-native-root .cc-consultation-model {
+  margin-left: auto;
+  font-family: var(--cc-mono);
+  font-size: 9.5px;
+  letter-spacing: 0;
+  color: var(--cc-text-tertiary);
+  text-transform: none;
+  font-weight: 500;
+}
+
+/* ── "Model is thinking" placeholder (Faz 8.2) ───────────────
+   Sits at the bottom of the chat (where the user is looking) and
+   disappears as soon as the first streaming chunk arrives. Distinct
+   from cc-live-progress which lives at the top of the scroll viewport. */
+.claude-native-root .cc-thinking-placeholder {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 14px;
+  margin: 6px 0 14px 18px;
+  border: 1px solid var(--cc-border-subtle);
+  border-radius: 10px;
+  background: var(--cc-cream-soft, var(--cc-cream));
+  font-family: var(--cc-mono);
+  font-size: 11px;
+  color: var(--cc-text-tertiary);
+  align-self: flex-start;
+  animation: cc-thinking-pulse 1.8s ease-in-out infinite;
+}
+.claude-native-root .cc-thinking-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--cc-accent);
+  box-shadow: 0 0 0 2px rgba(217,119,87,0.18);
+}
+.claude-native-root .cc-thinking-dot[data-provider="claude"]      { background: var(--c-claude); box-shadow: 0 0 0 2px rgba(201,123,59,0.2); }
+.claude-native-root .cc-thinking-dot[data-provider="gemini"]      { background: var(--c-gemini); box-shadow: 0 0 0 2px rgba(66,133,244,0.2); }
+.claude-native-root .cc-thinking-dot[data-provider="codex"]       { background: var(--c-codex);  box-shadow: 0 0 0 2px rgba(16,163,127,0.2); }
+.claude-native-root .cc-thinking-dot[data-provider="antigravity"] { background: var(--c-anti);   box-shadow: 0 0 0 2px rgba(138,108,255,0.2); }
+
+.claude-native-root .cc-thinking-text {
+  letter-spacing: 0;
+}
+.claude-native-root .cc-thinking-dots {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 2px;
+  font-size: 16px;
+  line-height: 1;
+}
+.claude-native-root .cc-thinking-dots span {
+  display: inline-block;
+  animation: cc-dot-fade 1.4s ease-in-out infinite;
+  opacity: 0.3;
+}
+.claude-native-root .cc-thinking-dots span:nth-child(2) { animation-delay: 0.18s; }
+.claude-native-root .cc-thinking-dots span:nth-child(3) { animation-delay: 0.36s; }
+
+@keyframes cc-thinking-pulse {
+  0%, 100% { opacity: 0.78; }
+  50% { opacity: 1; }
+}
+@keyframes cc-dot-fade {
+  0%, 100% { opacity: 0.3; transform: translateY(0); }
+  50% { opacity: 1; transform: translateY(-2px); }
+}
+
+/* ── Mid-conversation switch marker (Faz 8.3) ──────────────────
+   Horizontal divider with the swap details centered, and an optional
+   warning when the new provider can't see prior conversation. */
+.claude-native-root .cc-switch-marker {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 16px 0;
+  gap: 4px;
+}
+.claude-native-root .cc-switch-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+.claude-native-root .cc-switch-line::before,
+.claude-native-root .cc-switch-line::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--cc-border-subtle);
+}
+.claude-native-root .cc-switch-text {
+  font-family: var(--cc-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--cc-text-tertiary);
+  white-space: nowrap;
+  padding: 0 4px;
+}
+
+/* Provider switch gets a slightly stronger marker — context loss is
+ * a bigger deal than just bumping model size. */
+.claude-native-root .cc-switch-marker[data-kind="provider"] .cc-switch-text {
+  color: var(--cc-text-secondary);
+}
+
+.claude-native-root .cc-switch-warn {
+  font-family: var(--cc-mono);
+  font-size: 9.5px;
+  color: #C8A33D;
+  letter-spacing: 0;
+  margin-top: 2px;
+  padding: 3px 10px;
+  background: rgba(200,163,61,0.08);
+  border-radius: 999px;
 }
