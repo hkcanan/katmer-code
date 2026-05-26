@@ -1,6 +1,6 @@
 {
   "name": "obsidian-claude-native",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Multi-provider AI chat for Obsidian — Claude, Gemini, Codex, Antigravity with per-tab routing",
   "main": "main.js",
   "scripts": {
@@ -16,18 +16,17 @@
   "author": "",
   "license": "MIT",
   "devDependencies": {
-    "@types/diff-match-patch": "^1.0.36",
-    "@types/node": "^20.11.0",
-    "builtin-modules": "^3.3.0",
-    "esbuild": "^0.20.0",
+    "@types/diff-match-patch": "1.0.36",
+    "@types/node": "20.11.0",
+    "esbuild": "0.20.0",
     "obsidian": "latest",
     "tslib": "2.6.2",
     "typescript": "5.3.3"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.86",
-    "@codemirror/state": "^6.0.0",
-    "@codemirror/view": "^6.0.0",
-    "diff-match-patch": "^1.0.5"
+    "@anthropic-ai/claude-agent-sdk": "0.2.86",
+    "@codemirror/state": "6.5.0",
+    "@codemirror/view": "6.38.6",
+    "diff-match-patch": "1.0.5"
   }
 }

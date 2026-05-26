@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.2 — Review hygiene
+
+Cleans up the warnings flagged by the Obsidian community plugin
+automated review (the plugin already passed in 0.5.1; this just
+clears the warning list).
+
+- Removed `builtin-modules` package — replaced with Node's built-in
+  `module.builtinModules` in `esbuild.config.mjs`.
+- Pinned all dependency versions exactly (no `^` / `~` ranges) so
+  reproducible builds match the lockfile.
+- Committed `package-lock.json` (previously gitignored) so the
+  automated review can verify the bundle.
+- Replaced 7 of 8 `!important` CSS rules with `.claude-native-root`
+  specificity — last one is a deliberate utility override.
+- Dropped the `:has()` selector for the diff line-border indicator
+  (avoided the broad-invalidation perf warning; diff markers are
+  still visible via the inline mark/widget styles).
+- Refreshed the top README screenshot to show the new Modern Sharp
+  picker with multi-provider tabs and reasoning-effort selector.
+
 ## 0.5.1 — Community-plugin compliance
 
 Fixes raised by the Obsidian community plugin automated check:

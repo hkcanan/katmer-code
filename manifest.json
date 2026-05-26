@@ -1,7 +1,7 @@
 {
   "id": "katmer-code",
   "name": "KatmerCode",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "minAppVersion": "1.8.7",
   "description": "Multi-provider AI chat (Claude, Gemini, Codex, Antigravity) with per-tab providers, inline diff editing, academic research skills, and MCP support.",
   "author": "hkcanan",

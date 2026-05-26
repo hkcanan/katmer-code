@@ -10,7 +10,7 @@ data.json
 
 # Misc
 firebase-debug.log
-package-lock.json
+# package-lock.json — committed for reproducible builds (Obsidian plugin review requires it)
 
 # OS
 .DS_Store

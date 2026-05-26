@@ -445,13 +445,13 @@
 
 .cc-context-slot { /* context cards go here */ }
 
-.cc-textarea {
+.claude-native-root .cc-textarea {
   display: block;
   width: 100%;
-  border: none !important;
-  border-bottom: none !important;
+  border: none;
+  border-bottom: none;
   outline: none;
-  box-shadow: none !important;
+  box-shadow: none;
   background: transparent;
   font-family: var(--cc-font);
   font-size: 0.9rem;
@@ -870,11 +870,9 @@
 .cc-diffbar-accept-all { color: #5BA67E; font-weight: 700; }
 .cc-diffbar-accept-all:hover { background: #5BA67E; color: white; border-color: #5BA67E; }
 
-/* Change line — left border indicator (via :has selector) */
-.cm-line:has(.cc-inserted-inline),
-.cm-line:has(.cc-deleted-inline) {
-  border-left: 3px solid #D4A843 !important;
-}
+/* (Removed `:has()` line-border indicator — diff markers themselves
+ *  are visible via the inline mark/widget styles below, and `:has()`
+ *  triggers a CSS performance warning in Obsidian's plugin review.) */
 
 /* ── Error ── */
 .claude-native-msg-error .claude-native-msg-label { color: #CC5F4A; }
@@ -1165,7 +1163,7 @@
 }
 
 /* ── Report Notice ── */
-.katmer-report-notice { padding: 12px 16px !important; max-width: 320px; }
+.notice.katmer-report-notice { padding: 12px 16px; max-width: 320px; }
 .katmer-report-notice-title { font-weight: 600; font-size: 13px; margin-bottom: 4px; }
 .katmer-report-notice-file { font-size: 11px; opacity: 0.7; margin-bottom: 10px; }
 .katmer-report-notice-buttons { display: flex; gap: 6px; align-items: center; }
@@ -1368,9 +1366,9 @@
 .cc-stop-btn svg { width: 14px; height: 14px; fill: #fff; stroke: #fff; }
 
 /* ── Drag & drop ── */
-.cc-input-box.cc-dragover {
-  border-color: var(--cc-terracotta, #D97757) !important;
-  background: rgba(217,119,87,0.05) !important;
+.claude-native-root .cc-input-box.cc-dragover {
+  border-color: var(--cc-terracotta, #D97757);
+  background: rgba(217,119,87,0.05);
 }
 
 /* ── Response footer ── */
