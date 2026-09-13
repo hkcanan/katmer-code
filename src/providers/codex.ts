@@ -53,13 +53,14 @@ function mapApprovalPolicy(mode: string): string {
 }
 
 /** Map plugin effort tiers onto Codex's model_reasoning_effort values.
- * Codex supports: minimal | low | medium | high | xhigh (xhigh only on
- * select models). We map "max" to "high" for broad model compatibility. */
+ * Codex supports: minimal | low | medium | high | xhigh | max. */
 function mapReasoningEffort(effort: string): string {
   switch (effort) {
+    case "minimal": return "minimal";
     case "low":    return "low";
     case "medium": return "medium";
-    case "max":    return "high";  // safer than "xhigh" — not all models support it
+    case "xhigh":  return "xhigh";
+    case "max":    return "max";
     case "high":
     default:       return "high";
   }
