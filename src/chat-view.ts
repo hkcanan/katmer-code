@@ -1214,7 +1214,9 @@ export class ClaudeChatView extends ItemView {
       sub.textContent = "max → high (xhigh only on select models)";
     }
     const row = section.createDiv("cc-popup-effort-row");
-    const effortKeys: EffortLevel[] = ["low", "medium", "high", "max"];
+    const effortKeys: EffortLevel[] = this.pm.providerId === "codex"
+      ? ["minimal", "low", "medium", "high", "xhigh", "max"]
+      : ["low", "medium", "high", "max"];
     for (const key of effortKeys) {
       const pill = row.createEl("button", {
         cls: "cc-pill" + (key === this.pm.effort ? " is-active" : ""),

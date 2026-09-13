@@ -1115,13 +1115,13 @@
   font-family: var(--cc-mono);
   font-size: 13px;
   font-weight: 500;
-  color: var(--cc-terracotta);
+  color: var(--cc-accent);
   white-space: nowrap;
 }
 
 .cc-skill-desc {
   font-size: 12px;
-  color: var(--cc-text-dim);
+  color: var(--cc-text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1130,7 +1130,7 @@
 
 .cc-skill-badge {
   font-size: 10px;
-  color: var(--cc-text-dim);
+  color: var(--cc-text-secondary);
   background: var(--cc-border);
   padding: 1px 6px;
   border-radius: 8px;

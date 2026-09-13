@@ -49,7 +49,16 @@ export function getEnhancedPath(): string {
   extras.push("/opt/homebrew/bin", "/usr/local/bin");
 
   // user-local
-  extras.push(join(home, ".local", "bin"), join(home, ".cargo", "bin"));
+  // npm configured with a user prefix (a common macOS setup) is not
+  // necessarily present in Electron's stripped-down environment.
+  const npmPrefix = process.env.NPM_CONFIG_PREFIX;
+  extras.push(
+    ...(npmPrefix ? [join(npmPrefix, "bin")] : []),
+    join(home, ".npm-global", "bin"),
+    join(home, ".npm", "bin"),
+    join(home, ".local", "bin"),
+    join(home, ".cargo", "bin"),
+  );
 
   // system
   extras.push("/usr/bin", "/bin");
