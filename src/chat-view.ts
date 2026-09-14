@@ -1198,7 +1198,7 @@ export class ClaudeChatView extends ItemView {
 
     // Provider support matrix for reasoning effort:
     //   Claude   — native SDK option (low/medium/high/max)
-    //   Codex    — model_reasoning_effort config (minimal/low/medium/high/xhigh)
+    //   Codex    — model_reasoning_effort config (low/medium/high/xhigh)
     //   Gemini   — thinking_level exists per Gemini 3.x API but no CLI flag
     //              exposed yet (github.com/google-gemini/gemini-cli/issues/25122)
     //   Antigrav — agy v1.0.2 has no reasoning control
@@ -1211,11 +1211,11 @@ export class ClaudeChatView extends ItemView {
     titleRow.textContent = "Reasoning effort";
     if (this.pm.providerId === "codex") {
       const sub = section.createSpan({ cls: "cc-popup-effort-sub" });
-      sub.textContent = "max → high (xhigh only on select models)";
+      sub.textContent = "Max falls back to High on models without Max support";
     }
     const row = section.createDiv("cc-popup-effort-row");
     const effortKeys: EffortLevel[] = this.pm.providerId === "codex"
-      ? ["minimal", "low", "medium", "high", "xhigh", "max"]
+      ? ["low", "medium", "high", "xhigh", "max"]
       : ["low", "medium", "high", "max"];
     for (const key of effortKeys) {
       const pill = row.createEl("button", {
