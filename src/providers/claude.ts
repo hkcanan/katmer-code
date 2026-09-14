@@ -3,6 +3,14 @@ import { join } from "path";
 import { existsSync } from "fs";
 import { homedir, userInfo } from "os";
 import { getEnhancedPath, findCli } from "./path-detect";
+
+/** Claude Agent SDK supports low/medium/high/max; narrower Codex levels
+ * are intentionally not passed through to the Claude subprocess. */
+function resolveClaudeEffort(effort: EffortLevel | "minimal"): "low" | "medium" | "high" | "max" {
+  if (effort === "minimal") return "low";
+  if (effort === "xhigh") return "max";
+  return effort;
+}
 import type {
   ClaudeEvent,
   ClaudeNativeSettings,
@@ -325,7 +333,7 @@ export class ClaudeAdapter implements ProviderAdapter {
       cwd: this.cwd || undefined,
       env: this.buildEnv(),
       model,
-      effort: this.effort || "high",
+      effort: resolveClaudeEffort(this.effort || "high"),
       permissionMode: permMode,
       pathToClaudeCodeExecutable: cliPath || undefined,
       settingSources: ["user", "project", "local"],

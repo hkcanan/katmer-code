@@ -149,7 +149,7 @@ export interface SessionInfo {
 // ── Model & Effort ──
 
 export type ModelChoice = "opus" | "opus[1m]" | "sonnet" | "haiku";
-export type EffortLevel = "low" | "medium" | "high" | "max";
+export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
 export const MODEL_LABELS: Record<ModelChoice, string> = {
   "opus[1m]": "Opus 1M",
@@ -162,6 +162,7 @@ export const EFFORT_LABELS: Record<EffortLevel, string> = {
   low: "Low",
   medium: "Med",
   high: "High",
+  xhigh: "XHigh",
   max: "Max",
 };
 
@@ -253,6 +254,17 @@ export interface ModelOption {
  */
 export const PROVIDER_MODELS: Record<ProviderId, ModelOption[]> = {
   claude: [
+    { id: "claude-fable-5-1", label: "Fable 5.1", desc: "Anthropic flagship model", contextWindow: 1_000_000 },
+    { id: "claude-fable-5", label: "Fable 5", desc: "Active Anthropic model", contextWindow: 1_000_000 },
+    { id: "claude-opus-5", label: "Opus 5", desc: "Most capable Claude model", contextWindow: 1_000_000 },
+    { id: "claude-opus-4-8", label: "Opus 4.8", desc: "Previous-generation flagship", contextWindow: 1_000_000 },
+    { id: "claude-opus-4-7", label: "Opus 4.7", desc: "Previous-generation flagship", contextWindow: 1_000_000 },
+    { id: "claude-opus-4-6", label: "Opus 4.6", desc: "Previous-generation flagship", contextWindow: 1_000_000 },
+    { id: "claude-opus-4-5-20251101", label: "Opus 4.5", desc: "Active dated model", contextWindow: 200_000 },
+    { id: "claude-sonnet-5", label: "Sonnet 5", desc: "High-performance Claude model", contextWindow: 1_000_000 },
+    { id: "claude-sonnet-4-6", label: "Sonnet 4.6", desc: "High-performance and efficient", contextWindow: 1_000_000 },
+    { id: "claude-sonnet-4-5-20250929", label: "Sonnet 4.5", desc: "Active dated model", contextWindow: 200_000 },
+    { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5", desc: "Fast and efficient", contextWindow: 200_000 },
     { id: "opus[1m]", label: "Opus 1M", desc: "Most capable, 1M extended context", contextWindow: 1_000_000 },
     { id: "opus", label: "Opus", desc: "Most capable, 200K context", contextWindow: 200_000 },
     { id: "sonnet", label: "Sonnet", desc: "Balanced for everyday tasks", contextWindow: 200_000 },
@@ -261,15 +273,26 @@ export const PROVIDER_MODELS: Record<ProviderId, ModelOption[]> = {
   gemini: [
     // Models exposed by Gemini CLI's /model picker. 3.x family requires
     // Google AI Pro (Google One) or paid tier; 2.5 family works on free
-    // accounts too. Verified by querying the live CLI.
+    // accounts too. Verified by querying the live CLI. Keep these entries
+    // ahead of catalog-only models so the default remains CLI-verified.
     { id: "gemini-3.1-pro-preview", label: "3.1 Pro Preview", desc: "Latest, complex reasoning (AI Pro)", contextWindow: 1_048_576 },
     { id: "gemini-3-flash-preview", label: "3 Flash Preview", desc: "Fast preview tier (AI Pro)", contextWindow: 1_000_000 },
     { id: "gemini-3.1-flash-lite-preview", label: "3.1 Flash Lite Preview", desc: "Lightest preview tier", contextWindow: 1_000_000 },
     { id: "gemini-2.5-pro", label: "2.5 Pro", desc: "Stable, 1M context", contextWindow: 1_048_576 },
     { id: "gemini-2.5-flash", label: "2.5 Flash", desc: "Fast and balanced", contextWindow: 1_048_576 },
     { id: "gemini-2.5-flash-lite", label: "Flash Lite", desc: "Fastest, lightweight", contextWindow: 1_000_000 },
+    // Catalog-only entries. These are intentionally below the CLI-verified
+    // entries until they are confirmed by the installed Gemini CLI.
+    { id: "gemini-3.8-flash", label: "3.8 Flash", desc: "Latest stable, long-horizon and agentic work", contextWindow: 1_000_000 },
+    { id: "gemini-3.7-flash", label: "3.7 Flash", desc: "Stable coding and agentic workflows", contextWindow: 1_000_000 },
+    { id: "gemini-3.6-flash", label: "3.6 Flash", desc: "Stable speed and multimodal capability", contextWindow: 1_000_000 },
+    { id: "gemini-3.5-flash-lite", label: "3.5 Flash Lite", desc: "Fastest, cost-sensitive tier", contextWindow: 1_000_000 },
   ],
   codex: [
+    { id: "gpt-6-astra", label: "GPT-6 Astra", desc: "Most capable, complex reasoning and coding", contextWindow: 1_050_000 },
+    { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", desc: "Flagship model for complex professional work", contextWindow: 1_050_000 },
+    { id: "gpt-5.6-terra", label: "GPT-5.6 Terra", desc: "Balanced intelligence and cost", contextWindow: 1_050_000 },
+    { id: "gpt-5.6-luna", label: "GPT-5.6 Luna", desc: "Cost-sensitive, high-volume workloads", contextWindow: 1_050_000 },
     { id: "gpt-5.5", label: "GPT-5.5", desc: "Current flagship, complex coding", contextWindow: 400_000 },
     { id: "gpt-5.4-mini", label: "GPT-5.4 Mini", desc: "Codex-mini, faster for subagents", contextWindow: 128_000 },
     { id: "gpt-5.3-codex", label: "GPT-5.3 Codex", desc: "Previous codex generation", contextWindow: 400_000 },
@@ -288,6 +311,12 @@ export function lookupContextWindow(providerId: ProviderId, modelId: string): nu
   const models = PROVIDER_MODELS[providerId] || [];
   const found = models.find((m) => m.id === modelId);
   return found?.contextWindow || 200_000;
+}
+
+/** Keep effort values valid when a tab changes provider. */
+export function normalizeEffortForProvider(providerId: ProviderId, effort: EffortLevel): EffortLevel {
+  // Claude's SDK has no xhigh tier; max is its highest available setting.
+  return providerId === "claude" && effort === "xhigh" ? "max" : effort;
 }
 
 export const PROVIDER_INSTALL_HINTS: Record<ProviderId, string> = {
