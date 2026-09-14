@@ -6,7 +6,7 @@ import { getEnhancedPath, findCli } from "./path-detect";
 
 /** Claude Agent SDK supports low/medium/high/max; narrower Codex levels
  * are intentionally not passed through to the Claude subprocess. */
-function resolveClaudeEffort(effort: EffortLevel): "low" | "medium" | "high" | "max" {
+function resolveClaudeEffort(effort: EffortLevel | "minimal"): "low" | "medium" | "high" | "max" {
   if (effort === "minimal") return "low";
   if (effort === "xhigh") return "max";
   return effort;

@@ -1,3 +1,4 @@
+import { normalizeEffortForProvider } from "./types";
 import type {
   ClaudeEvent,
   ClaudeNativeSettings,
@@ -60,8 +61,8 @@ export class ProcessManager {
 
   get effort(): EffortLevel { return this._effort; }
   set effort(v: EffortLevel) {
-    this._effort = v;
-    this.adapter.effort = v;
+    this._effort = normalizeEffortForProvider(this._providerId, v);
+    this.adapter.effort = this._effort;
   }
 
   // ── Lifecycle ──
@@ -76,6 +77,7 @@ export class ProcessManager {
     if (id === this._providerId) return;
     this.adapter.destroy();
     this._providerId = id;
+    this._effort = normalizeEffortForProvider(id, this._effort);
     this.adapter = this.buildAdapter(id);
   }
 
