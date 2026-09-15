@@ -278,6 +278,7 @@ export const PROVIDER_MODELS: Record<ProviderId, ModelOption[]> = {
     { id: "gemini-3.1-pro-preview", label: "3.1 Pro Preview", desc: "Latest, complex reasoning (AI Pro)", contextWindow: 1_048_576 },
     { id: "gemini-3-flash-preview", label: "3 Flash Preview", desc: "Fast preview tier (AI Pro)", contextWindow: 1_000_000 },
     { id: "gemini-3.1-flash-lite-preview", label: "3.1 Flash Lite Preview", desc: "Lightest preview tier", contextWindow: 1_000_000 },
+    { id: "gemini-3.5-flash", label: "3.5 Flash", desc: "Stable general-purpose Flash model (AI Pro)", contextWindow: 1_000_000 },
     { id: "gemini-2.5-pro", label: "2.5 Pro", desc: "Stable, 1M context", contextWindow: 1_048_576 },
     { id: "gemini-2.5-flash", label: "2.5 Flash", desc: "Fast and balanced", contextWindow: 1_048_576 },
     { id: "gemini-2.5-flash-lite", label: "Flash Lite", desc: "Fastest, lightweight", contextWindow: 1_000_000 },
