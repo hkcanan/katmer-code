@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/hkcanan-katmer-code-badge.png)](https://mseep.ai/app/hkcanan-katmer-code)
+
 # KatmerCode
 
 Multi-provider AI chat inside Obsidian — Claude, Gemini, Codex, and Antigravity in one sidebar, with per-tab routing, inline diff editing, academic research skills, and MCP support.
